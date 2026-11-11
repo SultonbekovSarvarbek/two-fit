@@ -10,6 +10,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    WebAppInfo,
 )
 
 from ..i18n import LANGS
@@ -44,7 +46,14 @@ def kb(*rows: list[InlineKeyboardButton] | None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[r for r in rows if r])
 
 
-def main_menu(ctx: Ctx) -> ReplyKeyboardMarkup:
+def open_app_kb(ctx: Ctx) -> InlineKeyboardMarkup:
+    return kb([InlineKeyboardButton(text=ctx.t("app.open_btn"), web_app=WebAppInfo(url=ctx.cfg.webapp_url))])
+
+
+def main_menu(ctx: Ctx) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    if ctx.cfg.webapp_enabled:
+        # With the Mini App on, the chat keeps a single «Open app» button; the old keyboard is taken away.
+        return ReplyKeyboardRemove()
     b = lambda key: KeyboardButton(text=ctx.t(key))  # noqa: E731
     return ReplyKeyboardMarkup(
         keyboard=[

@@ -267,12 +267,32 @@ async def test_withdraw_and_report(h, api):
 
 
 # ------------------------------------------------------------------ bot side
+def _markups(calls):
+    return [c.reply_markup for c in calls if getattr(c, "reply_markup", None) is not None]
+
+
 async def test_app_command_only_when_configured(h):
     await h.send(SELLER, "/start")
     await h.click(SELLER, "lang:ru")
     calls = await h.send(SELLER, "/app")
-    assert not [b for c in calls for b in (getattr(getattr(c, "reply_markup", None), "inline_keyboard", None) or [])]
+    assert not [m for m in _markups(calls) if hasattr(m, "inline_keyboard")]
     object.__setattr__(h.cfg, "webapp_url", "https://app.example.com/")
     calls = await h.send(SELLER, "/app")
     button = calls[-1].reply_markup.inline_keyboard[0][0]
     assert button.web_app.url == "https://app.example.com/"
+
+
+async def test_chat_keeps_only_the_open_app_button(h):
+    object.__setattr__(h.cfg, "webapp_url", "https://app.example.com/")
+    await h.send(SELLER, "/start")
+    calls = await h.click(SELLER, "lang:ru")
+    calls += await h.send(SELLER, "/start")
+    calls += await h.send(SELLER, "что-то непонятное")
+    calls += await h.send(SELLER, "/menu")
+    markups = _markups(calls)
+    # The old reply keyboard is removed and never sent again
+    assert any(type(m).__name__ == "ReplyKeyboardRemove" for m in markups)
+    assert not [m for m in markups if hasattr(m, "keyboard")]
+    buttons = [b for m in markups if hasattr(m, "inline_keyboard") for row in m.inline_keyboard for b in row]
+    assert len(buttons) == 4 and all(b.web_app and b.web_app.url == "https://app.example.com/" for b in buttons)
+    assert "Выберите действие в меню" not in h.texts_to(SELLER)

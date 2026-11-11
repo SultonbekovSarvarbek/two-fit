@@ -4,12 +4,12 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, Message, WebAppInfo
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from ..callbacks import NOOP, LangCb
 from ..context import Ctx
 from ..middlewares import Btn
-from ..ui import btn, kb, lang_kb, main_menu
+from ..ui import btn, kb, lang_kb, main_menu, open_app_kb
 
 menu_router = Router(name="menu")
 fallback_router = Router(name="fallback")
@@ -20,16 +20,28 @@ _welcome_file_id: str | None = None  # cached after the first upload
 async def send_welcome(message: Message, ctx: Ctx) -> None:
     global _welcome_file_id
     image = ctx.cfg.welcome_image
+    app = ctx.cfg.webapp_enabled
+    text = ctx.t("app.welcome" if app else "welcome")
     if _welcome_file_id or image.exists():
         photo = _welcome_file_id or FSInputFile(image)
-        sent = await message.answer_photo(photo, caption=ctx.t("welcome"), reply_markup=main_menu(ctx))
+        sent = await message.answer_photo(photo, caption=text, reply_markup=main_menu(ctx))
         if sent.photo:
             _welcome_file_id = sent.photo[-1].file_id
     else:
-        await message.answer(ctx.t("welcome"), reply_markup=main_menu(ctx))
+        await message.answer(text, reply_markup=main_menu(ctx))
+    if app:
+        # The welcome removes the old reply keyboard, so the button needs a message of its own.
+        await send_open_app(message, ctx)
+
+
+async def send_open_app(message: Message, ctx: Ctx) -> None:
+    await message.answer(ctx.t("app.open_text"), reply_markup=open_app_kb(ctx))
 
 
 async def send_menu(message: Message, ctx: Ctx, key: str = "menu.hint") -> None:
+    if ctx.cfg.webapp_enabled:
+        await send_open_app(message, ctx)
+        return
     await message.answer(ctx.t(key), reply_markup=main_menu(ctx))
 
 
@@ -84,9 +96,7 @@ async def cmd_app(message: Message, state: FSMContext, ctx: Ctx) -> None:
     if not ctx.cfg.webapp_enabled:
         await cmd_menu(message, state, ctx)
         return
-    await message.answer(ctx.t("app.open_text"), reply_markup=kb(
-        [InlineKeyboardButton(text=ctx.t("app.open_btn"), web_app=WebAppInfo(url=ctx.cfg.webapp_url))]
-    ))
+    await send_open_app(message, ctx)
 
 
 @menu_router.message(Command("id"))
