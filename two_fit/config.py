@@ -20,6 +20,13 @@ class Config:
     page_size: int
     welcome_image: Path
     logo: Path
+    webapp_url: str = ""  # public https:// address of the Mini App; empty = Mini App is off
+    webapp_host: str = "127.0.0.1"
+    webapp_port: int = 8080
+
+    @property
+    def webapp_enabled(self) -> bool:
+        return self.webapp_url.startswith("https://")
 
     @property
     def support_url(self) -> str:
@@ -53,4 +60,7 @@ def load_config() -> Config:
         page_size=int(os.getenv("PAGE_SIZE", "5")),
         welcome_image=BASE_DIR / "assets" / "two-fit-description-640x360.png",
         logo=BASE_DIR / "assets" / "two-fit-logo.png",
+        webapp_url=os.getenv("WEBAPP_URL", "").strip(),
+        webapp_host=os.getenv("WEBAPP_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        webapp_port=int(os.getenv("WEBAPP_PORT", "8080")),
     )

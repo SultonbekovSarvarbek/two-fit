@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="format-detection" content="telephone=no">
+<meta name="robots" content="noindex">
+<title>Two Fit</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {
+  --page: var(--tg-theme-secondary-bg-color, #f0f1f4);
+  --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #ffffff));
+  --text: var(--tg-theme-text-color, #14171a);
+  --hint: var(--tg-theme-hint-color, #7d858f);
+  --accent: var(--tg-theme-button-color, #2c9a5e);
+  --on-accent: var(--tg-theme-button-text-color, #ffffff);
+  --link: var(--tg-theme-link-color, #2c9a5e);
+  --danger: var(--tg-theme-destructive-text-color, #d93c41);
+  --line: color-mix(in srgb, var(--hint) 24%, transparent);
+  --tint: color-mix(in srgb, var(--accent) 12%, transparent);
+  --safe-b: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px));
+  --tabbar: 58px;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: var(--tg-theme-secondary-bg-color, #101214);
+    --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #1b1e22));
+    --text: var(--tg-theme-text-color, #f2f4f6);
+    --hint: var(--tg-theme-hint-color, #8b939d);
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; }
+body {
+  background: var(--page); color: var(--text);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased; overscroll-behavior-y: none;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; padding: 0; text-align: inherit; }
+
+#view { max-width: 560px; margin: 0 auto; padding: 16px 16px calc(var(--tabbar) + var(--safe-b) + 24px); }
+body.pushed #view, body.typing #view { padding-bottom: calc(var(--safe-b) + 28px); }
+
+h1 { font-size: 26px; line-height: 1.15; letter-spacing: -0.02em; margin: 6px 0 14px; text-wrap: balance; }
+h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--hint); margin: 24px 4px 8px; }
+p { margin: 0; }
+.muted { color: var(--hint); }
+.small { font-size: 13.5px; line-height: 1.35; }
+.note { color: var(--hint); font-size: 13.5px; line-height: 1.4; margin: 8px 4px 0; }
+.num { font-variant-numeric: tabular-nums; }
+
+.card { background: var(--card); border-radius: 14px; }
+.stack > * + * { margin-top: 10px; }
+.stack > h2 { margin-top: 22px; }
+
+/* city filter */
+.chips { display: flex; gap: 8px; overflow-x: auto; margin: 0 -16px 14px; padding: 2px 16px; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; padding: 7px 13px; border-radius: 999px; background: var(--card); font-size: 14.5px; white-space: nowrap;
+}
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.chip .n { opacity: 0.6; margin-left: 5px; }
+
+/* listing rows */
+.item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 16px; }
+.item:active { opacity: 0.6; }
+.item .main { flex: 1; min-width: 0; }
+.item .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .sub { color: var(--hint); font-size: 13.5px; margin-top: 2px; }
+.item .price { text-align: right; font-weight: 700; white-space: nowrap; }
+.item .price small { display: block; font-weight: 400; font-size: 12px; color: var(--hint); }
+.badge { display: inline-block; font-size: 12.5px; padding: 3px 9px; border-radius: 999px; background: var(--page); margin-top: 6px; }
+
+/* detail */
+.hero { padding: 18px 16px; }
+.hero .label { color: var(--hint); font-size: 13.5px; }
+.hero .value { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-top: 2px; }
+.hero .value small { font-size: 16px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
+.rows > div { display: flex; justify-content: space-between; gap: 16px; padding: 12px 16px; }
+.rows > div + div { border-top: 0.5px solid var(--line); }
+.rows .k { color: var(--hint); flex: none; }
+.rows .v { text-align: right; overflow-wrap: anywhere; }
+.rows .strong .v { font-weight: 700; }
+.text { padding: 14px 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.callout { padding: 12px 14px; border-radius: 12px; background: var(--tint); font-size: 14.5px; line-height: 1.4; }
+.callout.bad { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+/* buttons */
+.btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 50px;
+  padding: 12px 16px; border-radius: 13px; font-weight: 600; text-align: center;
+  background: var(--accent); color: var(--on-accent);
+}
+.btn:active { opacity: 0.75; }
+.btn[disabled] { opacity: 0.5; pointer-events: none; }
+.btn.ghost { background: var(--card); color: var(--link); }
+.btn.danger { background: var(--card); color: var(--danger); }
+.btn.small { min-height: 36px; width: auto; padding: 6px 14px; border-radius: 10px; font-size: 14.5px; background: var(--tint); color: var(--link); }
+.btn.small.danger { background: none; color: var(--danger); }
+
+/* forms */
+.field { display: block; padding: 10px 16px 12px; position: relative; }
+.field + .field { border-top: 0.5px solid var(--line); }
+.field > span { display: block; font-size: 12.5px; color: var(--hint); margin-bottom: 2px; }
+.field input, .field select, .field textarea {
+  display: block; width: 100%; border: 0; outline: 0; background: transparent; padding: 2px 0; margin: 0;
+  appearance: none; -webkit-appearance: none; border-radius: 0; min-height: 26px;
+}
+.field textarea { resize: none; min-height: 84px; }
+.field ::placeholder { color: var(--hint); opacity: 0.65; }
+.field select:invalid { color: var(--hint); }
+.field .hint { font-size: 12.5px; color: var(--hint); margin-top: 4px; }
+.field .err { font-size: 13px; color: var(--danger); margin-top: 4px; }
+.field.invalid > span { color: var(--danger); }
+.field .counter { position: absolute; right: 16px; top: 10px; font-size: 12.5px; color: var(--hint); }
+.row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+.row .grow { flex: 1; min-width: 0; }
+.check { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; }
+.check input { appearance: none; -webkit-appearance: none; flex: none; width: 24px; height: 24px; margin: 0; border-radius: 7px; border: 2px solid var(--hint); }
+.check input:checked {
+  border-color: var(--accent);
+  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center/16px no-repeat;
+}
+.check.invalid input { border-color: var(--danger); }
+
+/* misc */
+.steps { margin: 0; padding: 6px 16px 6px 40px; }
+.steps li { padding: 8px 0; }
+.steps li + li { border-top: 0.5px solid var(--line); }
+.steps li::marker { color: var(--hint); font-variant-numeric: tabular-nums; }
+.seg { display: flex; padding: 4px; gap: 4px; }
+.seg button { flex: 1; text-align: center; padding: 9px; border-radius: 10px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.empty { text-align: center; color: var(--hint); padding: 56px 24px 24px; }
+.empty .btn { margin-top: 18px; }
+.done { text-align: center; padding: 40px 8px 8px; }
+.done .mark { width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 50%; background: var(--tint); color: var(--accent); display: grid; place-items: center; }
+.done .mark svg { width: 32px; height: 32px; }
+.done h1 { margin-bottom: 8px; }
+.spinner { width: 26px; height: 26px; margin: 64px auto; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+
+#tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: center;
+  background: var(--card); border-top: 0.5px solid var(--line); padding-bottom: var(--safe-b);
+}
+#tabs button { flex: 1; max-width: 140px; height: var(--tabbar); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11px; color: var(--hint); }
+#tabs button[aria-current="page"] { color: var(--accent); }
+#tabs svg { width: 24px; height: 24px; }
+body.pushed #tabs, body.typing #tabs, body.gate #tabs { display: none; }
+
+#toast {
+  position: fixed; left: 50%; bottom: calc(var(--tabbar) + var(--safe-b) + 16px); transform: translate(-50%, 12px);
+  max-width: calc(100% - 32px); padding: 11px 16px; border-radius: 12px; z-index: 10; font-size: 14.5px; text-align: center;
+  background: color-mix(in srgb, var(--text) 92%, transparent); color: var(--page);
+  opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s;
+}
+#toast.on { opacity: 1; transform: translate(-50%, 0); }
+body.pushed #toast, body.typing #toast { bottom: calc(var(--safe-b) + 16px); }
+</style>
+</head>
+<body class="gate">
+<main id="view"><div class="spinner"></div></main>
+<nav id="tabs"></nav>
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+const tg = window.Telegram && window.Telegram.WebApp;
+const $view = document.getElementById("view");
+const $tabs = document.getElementById("tabs");
+const $toast = document.getElementById("toast");
+
+let B = null;  // bootstrap: texts, limits, saved contacts
+const S = {
+  tab: "catalog",
+  stack: [],        // views opened on top of a tab
+  rev: 0,           // bumps on every render; stale async results are dropped
+  cat: { city: "", items: [], total: 0, cities: [], loaded: false },
+  my: null,         // own listings, loaded lazily
+  draft: null,      // unfinished «sell» form survives tab switches
+};
+
+const ICONS = {
+  catalog: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  sell: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
+  my: '<path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
+  more: '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+};
+function icon(name) {
+  const span = document.createElement("span");
+  span.style.display = "contents";
+  // Static markup from the table above — never user data.
+  span.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + "</svg>";
+  return span.firstChild;
+}
+
+/* ---------------------------------------------------------------- helpers */
+// Builds DOM nodes; text always goes in as text nodes, so user content can never become markup.
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k in el && k !== "list" && k !== "form") el[k] = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid != null && kid !== false) el.append(kid.nodeType ? kid : String(kid));
+  }
+  return el;
+}
+function T(key, vars) {
+  const tpl = (B && B.texts[key]) || key;
+  const all = Object.assign({}, B && B.vars, vars);
+  return tpl.replace(/\{(\w+)\}/g, (_, k) => (all[k] != null ? all[k] : ""));
+}
+const money = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+const dmy = (iso) => iso.split("-").reverse().join(".");
+const city = (code) => T("city." + code);
+const fee = (price) => Math.floor((price * B.vars.percent + 50) / 100);
+
+async function api(method, path, body) {
+  const opt = { method, headers: { Authorization: "tma " + tg.initData } };
+  if (body instanceof FormData) opt.body = body;
+  else if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  let res, data = null;
+  try {
+    res = await fetch(new URL("api/" + path, document.baseURI), opt);
+    data = await res.json();
+  } catch (e) { /* network or non-JSON answer: handled below */ }
+  if (!res || !res.ok || !data) {
+    const err = new Error((data && data.message) || T("app.err.network"));
+    err.code = data && data.error; err.field = data && data.field; err.status = res && res.status;
+    throw err;
+  }
+  return data;
+}
+
+let toastTimer;
+function toast(text) {
+  $toast.textContent = text;
+  $toast.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $toast.classList.remove("on"), 2800);
+}
+function haptic(kind) {
+  try { tg.HapticFeedback.notificationOccurred(kind); } catch (e) { /* older clients */ }
+}
+function ask(text) {
+  return new Promise((resolve) => {
+    if (tg.isVersionAtLeast && tg.isVersionAtLeast("6.2")) tg.showConfirm(text, resolve);
+    else resolve(window.confirm(text));
+  });
+}
+function openOperator() {
+  try { tg.openTelegramLink(B.support_url); } catch (e) { window.open(B.support_url, "_blank"); }
+}
+function operatorBtn(primary) {
+  return h("button", { class: primary ? "btn" : "btn ghost", type: "button", onclick: openOperator }, T("app.operator"));
+}
+async function busy(button, fn) {
+  if (button.disabled) return;
+  button.disabled = true;
+  try { await fn(); } catch (e) { haptic("error"); toast(e.message); } finally { button.disabled = false; }
+}
+
+/* ---------------------------------------------------------------- navigation */
+function current() { return S.stack.length ? S.stack[S.stack.length - 1] : { name: S.tab }; }
+function go(view) { S.stack.push(view); render(); }
+function back() { S.stack.pop(); render(); }
+function replace(view) { S.stack[S.stack.length - 1] = view; render(); }
+function switchTab(tab) { S.tab = tab; S.stack = []; render(); }
+
+function render() {
+  const view = current();
+  const rev = ++S.rev;
+  document.body.classList.remove("gate");
+  document.body.classList.toggle("pushed", S.stack.length > 0);
+  try { S.stack.length ? tg.BackButton.show() : tg.BackButton.hide(); } catch (e) { /* older clients */ }
+  $tabs.replaceChildren(...["catalog", "sell", "my", "more"].map((tab) =>
+    h("button", { type: "button", "aria-current": tab === S.tab ? "page" : null, onclick: () => switchTab(tab) },
+      icon(tab), h("span", null, T("app.tab." + tab)))));
+  $view.replaceChildren(...[VIEWS[view.name](view, rev)].flat());
+  window.scrollTo(0, 0);
+}
+// Run an async load for the view that is on screen now; ignore the result if the user moved on.
+function load(rev, promise, done) {
+  promise.then((data) => { if (rev === S.rev) done(data); }, (err) => { if (rev === S.rev) failed(err); });
+}
+function failed(err) {
+  $view.replaceChildren(h("div", { class: "empty" }, h("p", null, err.message),
+    h("button", { class: "btn ghost", type: "button", onclick: render }, T("app.retry"))));
+}
+const spinner = () => h("div", { class: "spinner" });
+
+/* ---------------------------------------------------------------- catalog */
+function listingRow(l, onclick, extra) {
+  return h("button", { class: "card item", type: "button", onclick },
+    h("div", { class: "main" },
+      h("div", { class: "title" }, l.tariff),
+      h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
+      extra),
+    h("div", { class: "price num" }, money(l.price), h("small", null, T("app.sum"))));
+}
+
+async function fetchCatalog(reset) {
+  const c = S.cat;
+  const offset = reset ? 0 : c.items.length;
+  const data = await api("GET", "catalog?city=" + encodeURIComponent(c.city) + "&offset=" + offset);
+  c.items = reset ? data.items : c.items.concat(data.items);
+  c.total = data.total; c.cities = data.cities; c.city = data.city; c.loaded = true;
+}
+
+function catalogView(view, rev) {
+  const c = S.cat;
+  const head = h("h1", null, T("app.catalog.title"));
+  if (!c.loaded) {
+    load(rev, fetchCatalog(true), render);
+    return [head, spinner()];
+  }
+  const pick = (code) => { c.city = code; c.loaded = false; render(); };
+  const chips = c.cities.length > 1 || c.city ? h("div", { class: "chips" },
+    h("button", { class: "chip", type: "button", "aria-pressed": String(!c.city), onclick: () => pick("") }, T("app.catalog.all")),
+    c.cities.map((x) => h("button", { class: "chip", type: "button", "aria-pressed": String(c.city === x.code), onclick: () => pick(x.code) },
+      city(x.code), h("span", { class: "n num" }, x.count)))) : null;
+  if (!c.items.length) {
+    return [head, chips, h("div", { class: "empty" }, h("p", null, T("app.catalog.empty")), operatorBtn())];
+  }
+  const more = c.items.length < c.total
+    ? h("button", { class: "btn ghost", type: "button", onclick: (e) => busy(e.currentTarget, async () => { await fetchCatalog(false); render(); }) }, T("app.catalog.more"))
+    : null;
+  return [head, chips, h("div", { class: "stack" }, c.items.map((l) => listingRow(l, () => go({ name: "listing", id: l.id }))), more)];
+}
+
+function publicRows(l) {
+  return h("div", { class: "card rows" },
+    h("div", null, h("span", { class: "k" }, T("app.f.city")), h("span", { class: "v" }, city(l.city))),
+    h("div", null, h("span", { class: "k" }, T("app.f.tariff")), h("span", { class: "v" }, l.tariff)),
+    h("div", null, h("span", { class: "k" }, T("app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))));
+}
+function priceHero(l) {
+  return h("div", { class: "card hero" },
+    h("div", { class: "label" }, T("app.f.price")),
+    h("div", { class: "value num" }, money(l.price) + " ", h("small", null, T("app.sum"))));
+}
+
+function listingView(view, rev) {
+  if (!view.data) {
+    load(rev, api("GET", "listings/" + view.id), (data) => {
+      if (data.own) replace({ name: "mine", id: view.id, listing: data.listing });
+      else { view.data = data; render(); }
+    });
+    return spinner();
+  }
+  const l = view.data.listing;
+  const action = view.data.requested
+    ? [h("div", { class: "callout" }, T("app.buy.requested")), operatorBtn(true)]
+    : [h("button", { class: "btn", type: "button", onclick: () => go({ name: "buy", id: l.id }) }, T("app.buy.btn")), operatorBtn()];
+  return [
+    h("h1", null, T("app.listing", { id: l.id })),
+    h("div", { class: "stack" },
+      priceHero(l), publicRows(l),
+      l.description ? h("div", { class: "card text" }, l.description) : null,
+      action,
+      h("p", { class: "note" }, T("app.buy.free") + " " + T("app.op_hint", { id: l.id }))),
+  ];
+}
+
+/* ---------------------------------------------------------------- forms */
+function field(label, control, opts) {
+  opts = opts || {};
+  const err = h("div", { class: "err", hidden: true });
+  const wrap = h("label", { class: "field" }, h("span", null, label), control,
+    opts.hint ? h("div", { class: "hint" }, opts.hint) : null, opts.extra, err);
+  control.addEventListener("input", () => setError(wrap, ""));
+  wrap.error = err;
+  return wrap;
+}
+function setError(wrap, message) {
+  wrap.classList.toggle("invalid", !!message);
+  if (wrap.error) { wrap.error.textContent = message; wrap.error.hidden = !message; }
+}
+function showFieldError(fields, err) {
+  const wrap = fields[err.field];
+  haptic("error");
+  if (!wrap) { toast(err.message); return; }
+  setError(wrap, err.message);
+  if (!wrap.error) toast(err.message);
+  wrap.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function buyView(view) {
+  if (view.done) {
+    return h("div", { class: "done" },
+      h("div", { class: "mark" }, icon("check")),
+      h("h1", null, T("app.buy.done_title")),
+      h("p", { class: "muted" }, T("app.buy.done_text", { id: view.id })),
+      h("div", { class: "stack", style: "margin-top:24px" },
+        operatorBtn(true), h("button", { class: "btn ghost", type: "button", onclick: () => switchTab("catalog") }, T("app.tab.catalog"))));
+  }
+  const name = h("input", { type: "text", autocomplete: "name", maxLength: B.limits.name_max, value: B.user.name });
+  const phone = h("input", { type: "tel", autocomplete: "tel", inputMode: "tel", placeholder: "+998 90 123 45 67", value: B.user.phone });
+  const fields = { name: field(T("app.buy.name"), name), phone: field(T("app.buy.phone"), phone) };
+  const submit = h("button", { class: "btn", type: "submit" }, T("app.buy.submit"));
+  const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
+    e.preventDefault();
+    if (submit.disabled) return;
+    submit.disabled = true;
+    try {
+      await api("POST", "listings/" + view.id + "/request", { name: name.value, phone: phone.value });
+      B.user = { name: name.value.trim(), phone: phone.value.trim() };
+      haptic("success");
+      S.stack = [{ name: "buy", id: view.id, done: true }];
+      render();
+    } catch (err) {
+      submit.disabled = false;
+      showFieldError(fields, err);
+    }
+  } }, h("div", { class: "card" }, fields.name, fields.phone), h("p", { class: "note" }, "🔒 " + T("app.buy.privacy")), submit);
+  return [h("h1", null, T("app.buy.title", { id: view.id })), form];
+}
+
+function newDraft(l) {
+  return l
+    ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, price: String(l.price), description: l.description,
+        name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: true }
+    : { id: null, city: "", tariff: "", end_date: "", price: "", description: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
+}
+
+function sellForm(d, onDone) {
+  const L = B.limits;
+  const bind = (el, key, clean) => { el.addEventListener("input", () => { d[key] = clean ? clean(el) : el.value; }); return el; };
+
+  const citySel = bind(h("select", { required: true },
+    h("option", { value: "", disabled: true, hidden: true }, T("app.sell.city_ph")),
+    B.cities.map((c) => h("option", { value: c }, city(c)))), "city");
+  citySel.value = d.city;
+  citySel.addEventListener("change", () => { d.city = citySel.value; setError(fields.city, ""); });
+  const tariff = bind(h("input", { type: "text", maxLength: L.tariff_max, placeholder: T("app.sell.tariff_ph"), value: d.tariff }), "tariff");
+  const date = bind(h("input", { type: "date", min: L.date_min, max: L.date_max, value: d.end_date }), "end_date");
+  date.addEventListener("change", () => { d.end_date = date.value; });
+
+  const calc = h("div", { class: "card rows", hidden: true });
+  const accept = h("input", { type: "checkbox", checked: d.accept });
+  const acceptRow = h("label", { class: "card check" }, accept, h("span", null, T("app.sell.accept")));
+  const drawCalc = () => {
+    const p = Number(d.price);
+    calc.hidden = !(p >= L.price_min && p <= L.price_max);
+    if (calc.hidden) return;
+    const f = fee(p);
+    calc.replaceChildren(
+      h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(p) + " " + T("app.sum"))),
+      h("div", null, h("span", { class: "k" }, T("app.c.fee")), h("span", { class: "v num" }, "− " + money(f) + " " + T("app.sum"))),
+      h("div", { class: "strong" }, h("span", { class: "k" }, T("app.c.net")), h("span", { class: "v num" }, money(p - f) + " " + T("app.sum"))));
+  };
+  const price = h("input", { type: "text", inputMode: "numeric", placeholder: "2 000 000", value: d.price ? money(d.price) : "" });
+  price.addEventListener("input", () => {
+    const digits = price.value.replace(/\D/g, "").replace(/^0+/, "").slice(0, 9);
+    if (digits !== d.price) { d.accept = accept.checked = false; }  // consent is for one exact price
+    d.price = digits;
+    price.value = digits ? money(digits) : "";
+    drawCalc();
+  });
+  accept.addEventListener("change", () => { d.accept = accept.checked; acceptRow.classList.remove("invalid"); });
+
+  const counter = h("span", { class: "counter num" });
+  const desc = bind(h("textarea", { maxLength: L.desc_max, placeholder: T("app.sell.desc_ph"), value: d.description }), "description");
+  const drawCounter = () => { counter.textContent = desc.value.length + "/" + L.desc_max; };
+  desc.addEventListener("input", drawCounter);
+
+  // Screenshot: uploaded right away, the form keeps only a signed reference.
+  const file = h("input", { type: "file", accept: "image/*", hidden: true });
+  const shotRow = h("div", { class: "row" });
+  const drawShot = (loading) => {
+    shotRow.classList.remove("invalid");
+    shotRow.replaceChildren(
+      h("div", { class: "grow" }, h("div", null, T("app.sell.shot")),
+        h("div", { class: "small muted" }, loading ? T("app.sell.shot_loading") : d.shot ? T("app.sell.shot_ok") : T("app.sell.shot_hint"))),
+      loading ? null : d.shot
+        ? h("button", { class: "btn small danger", type: "button", onclick: () => { d.shot = null; drawShot(); } }, T("app.sell.shot_remove"))
+        : h("button", { class: "btn small", type: "button", onclick: () => file.click() }, T("app.sell.shot_add")));
+  };
+  file.addEventListener("change", async () => {
+    const picked = file.files[0];
+    file.value = "";
+    if (!picked) return;
+    drawShot(true);
+    try {
+      const body = new FormData();
+      body.append("file", picked);
+      d.shot = await api("POST", "screenshot", body);
+    } catch (err) { haptic("error"); toast(err.message); }
+    drawShot();
+  });
+
+  const name = bind(h("input", { type: "text", autocomplete: "name", maxLength: L.name_max, value: d.name }), "name");
+  const phone = bind(h("input", { type: "tel", autocomplete: "tel", inputMode: "tel", placeholder: "+998 90 123 45 67", value: d.phone }), "phone");
+
+  const fields = {
+    city: field(T("app.f.city"), citySel),
+    tariff: field(T("app.f.tariff"), tariff),
+    end_date: field(T("app.f.date"), date),
+    price: field(T("app.f.price"), price, { hint: T("app.sell.price_hint") }),
+    description: field(T("app.f.desc"), desc, { extra: counter }),
+    name: field(T("app.sell.name"), name),
+    phone: field(T("app.buy.phone"), phone),
+    accept: acceptRow,
+    screenshot: shotRow,
+  };
+  const submit = h("button", { class: "btn", type: "submit" }, T("app.sell.submit"));
+  const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
+    e.preventDefault();
+    if (submit.disabled) return;
+    if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
+    submit.disabled = true;
+    const body = { city: d.city, tariff: d.tariff, end_date: d.end_date, price: d.price, description: d.description,
+                   name: d.name, phone: d.phone, accepted_price: Number(d.price), screenshot: d.shot };
+    try {
+      const res = d.id ? await api("PUT", "listings/" + d.id, body) : await api("POST", "listings", body);
+      B.user = { name: d.name.trim(), phone: d.phone.trim() };
+      haptic("success");
+      onDone(res.id);
+    } catch (err) {
+      submit.disabled = false;
+      showFieldError(fields, err);
+    }
+  } },
+    h("div", { class: "card" }, fields.city, fields.tariff, fields.end_date),
+    h("div", { class: "card" }, fields.price), calc,
+    h("div", { class: "card" }, fields.description),
+    h("div", { class: "card" }, shotRow, file),
+    h("h2", null, T("app.sell.contacts")),
+    h("div", { class: "card" }, fields.name, fields.phone),
+    h("p", { class: "note" }, "🔒 " + T("app.sell.contacts_hint")),
+    acceptRow,
+    h("p", { class: "note" }, T("commission.note")),
+    submit);
+  drawCalc(); drawCounter(); drawShot();
+  return form;
+}
+
+function afterSubmit(id) {
+  S.draft = null; S.my = null; S.cat.loaded = false;
+  S.tab = "my"; S.stack = [];
+  render();
+  toast(T("app.sell.sent", { id }));
+}
+function sellView() {
+  if (!S.draft) S.draft = newDraft(null);
+  return [h("h1", null, T("app.sell.title")), h("p", { class: "note", style: "margin:0 4px 14px" }, T("app.sell.intro")),
+          sellForm(S.draft, afterSubmit)];
+}
+function editView(view) {
+  if (!view.draft) view.draft = newDraft(view.listing);
+  return [h("h1", null, T("app.sell.edit_title", { id: view.listing.id })),
+          h("p", { class: "note", style: "margin:0 4px 14px" }, T("app.sell.edit_intro")),
+          sellForm(view.draft, afterSubmit)];
+}
+
+/* ---------------------------------------------------------------- my listings */
+function myView(view, rev) {
+  const head = h("h1", null, T("app.my.title"));
+  if (!S.my) {
+    load(rev, api("GET", "my"), (data) => { S.my = data.items; render(); });
+    return [head, spinner()];
+  }
+  if (!S.my.length) {
+    return [head, h("div", { class: "empty" }, h("p", null, T("app.my.empty")),
+      h("button", { class: "btn", type: "button", onclick: () => switchTab("sell") }, T("app.sell.title")))];
+  }
+  return [head, h("div", { class: "stack" }, S.my.map((l) =>
+    listingRow(l, () => go({ name: "mine", id: l.id, listing: l }), h("span", { class: "badge" }, "№" + l.id + " · " + T("status." + l.status)))))];
+}
+
+function mineView(view) {
+  const l = view.listing;
+  const update = (data) => {
+    view.listing = data.listing;
+    if (S.my) S.my = S.my.map((x) => (x.id === data.listing.id ? data.listing : x));
+    S.cat.loaded = false;
+    render();
+  };
+  const act = (key, question, path, doneKey) => h("button", { class: "btn " + (path === "withdraw" ? "danger" : "ghost"), type: "button",
+    onclick: (e) => { const b = e.currentTarget; busy(b, async () => {
+      if (!(await ask(T(question, { id: l.id })))) return;
+      const data = await api("POST", "listings/" + l.id + "/" + path);
+      haptic("success"); update(data); toast(T(doneKey));
+    }); } }, T(key));
+  return [
+    h("h1", null, T("app.listing", { id: l.id })),
+    h("div", { class: "stack" },
+      h("div", { class: "callout" + (l.status === "rejected" || l.status === "removed" ? " bad" : "") },
+        h("div", { style: "font-weight:600" }, T("status." + l.status)),
+        l.reject_reason ? h("div", { style: "margin-top:4px" }, T("app.my.reason", { reason: l.reject_reason })) : null,
+        l.sale_reported ? h("div", { style: "margin-top:4px" }, T("app.my.sale_reported")) : null),
+      publicRows(l),
+      l.description ? h("div", { class: "card text" }, l.description) : null,
+      h("div", { class: "card rows" },
+        h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(l.price) + " " + T("app.sum"))),
+        h("div", null, h("span", { class: "k" }, T("app.c.fee")), h("span", { class: "v num" }, "− " + money(l.commission) + " " + T("app.sum"))),
+        h("div", { class: "strong" }, h("span", { class: "k" }, T("app.c.net")), h("span", { class: "v num" }, money(l.net) + " " + T("app.sum")))),
+      h("h2", null, "🔒 " + T("app.my.private")),
+      h("div", { class: "card rows" },
+        h("div", null, h("span", { class: "k" }, l.seller_name), h("span", { class: "v num" }, l.seller_phone)),
+        h("div", null, h("span", { class: "k" }, T(l.has_screenshot ? "app.my.shot_yes" : "app.my.shot_no")))),
+      h("div", { class: "stack", style: "margin-top:20px" },
+        l.can_edit ? h("button", { class: "btn", type: "button", onclick: () => go({ name: "edit", listing: l }) }, T("app.my.edit")) : null,
+        l.can_report ? act("app.my.report", "app.my.report_q", "report", "app.my.report_done") : null,
+        l.can_withdraw ? act("app.my.withdraw", "app.my.withdraw_q", "withdraw", "app.my.withdrawn") : null,
+        operatorBtn())),
+  ];
+}
+
+/* ---------------------------------------------------------------- more */
+function moreView() {
+  const setLang = (code, button) => busy(button, async () => {
+    if (code === B.lang) return;
+    B = await api("POST", "lang", { lang: code });
+    document.documentElement.lang = B.lang;
+    render();
+  });
+  return [
+    h("h1", null, "Two Fit"),
+    h("h2", { style: "margin-top:8px" }, T("app.more.how")),
+    h("div", { class: "card" }, h("ol", { class: "steps" }, [1, 2, 3, 4, 5, 6].map((i) => h("li", null, T("app.how." + i))))),
+    h("p", { class: "note" }, T("app.how.note1")),
+    h("p", { class: "note" }, T("app.how.note2")),
+    h("h2", null, T("app.more.support")),
+    h("div", { class: "stack" }, h("p", { class: "note", style: "margin-top:0" }, T("app.more.support_text")), operatorBtn(true)),
+    h("h2", null, T("app.more.lang")),
+    h("div", { class: "card seg" }, B.langs.map((x) =>
+      h("button", { type: "button", "aria-pressed": String(x.code === B.lang), onclick: (e) => setLang(x.code, e.currentTarget) }, x.name))),
+  ];
+}
+
+const VIEWS = { catalog: catalogView, listing: listingView, buy: buyView, sell: sellView, edit: editView, my: myView, mine: mineView, more: moreView };
+
+/* ---------------------------------------------------------------- start */
+function gate(lines, retry) {
+  document.body.classList.add("gate");
+  $view.replaceChildren(h("div", { class: "empty" }, lines.map((x) => h("p", { style: "margin-bottom:8px" }, x)),
+    retry ? h("button", { class: "btn ghost", type: "button", onclick: start }, "↻") : null));
+}
+async function start() {
+  if (!tg || !tg.initData) {
+    gate(["Откройте Two Fit внутри Telegram — через кнопку в чате с ботом.", "Two Fit иловасини Telegram ичида, бот билан чатдаги тугма орқали очинг."]);
+    return;
+  }
+  $view.replaceChildren(spinner());
+  try {
+    B = await api("GET", "bootstrap");
+  } catch (err) {
+    gate(err.code ? [err.message] : ["Нет связи с сервером. Попробуйте ещё раз.", "Сервер билан алоқа йўқ. Қайтадан уриниб кўринг."], true);
+    return;
+  }
+  document.documentElement.lang = B.lang;
+  render();
+}
+if (tg) {
+  try {
+    tg.ready(); tg.expand();
+    tg.BackButton.onClick(back);
+    tg.setHeaderColor("secondary_bg_color"); tg.setBackgroundColor("secondary_bg_color");
+  } catch (e) { /* older clients */ }
+}
+// Hide the tab bar while the on-screen keyboard is open.
+document.addEventListener("focusin", (e) => { if (e.target.matches("input:not([type=checkbox]):not([type=file]), textarea")) document.body.classList.add("typing"); });
+document.addEventListener("focusout", () => document.body.classList.remove("typing"));
+start();
+</script>
+</body>
+</html>
