@@ -4,7 +4,7 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, Message, WebAppInfo
 
 from ..callbacks import NOOP, LangCb
 from ..context import Ctx
@@ -77,6 +77,16 @@ async def menu_how(message: Message, state: FSMContext, ctx: Ctx) -> None:
 async def cmd_menu(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     await send_menu(message, ctx)
+
+
+@menu_router.message(Command("app"))
+async def cmd_app(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    if not ctx.cfg.webapp_enabled:
+        await cmd_menu(message, state, ctx)
+        return
+    await message.answer(ctx.t("app.open_text"), reply_markup=kb(
+        [InlineKeyboardButton(text=ctx.t("app.open_btn"), web_app=WebAppInfo(url=ctx.cfg.webapp_url))]
+    ))
 
 
 @menu_router.message(Command("id"))
