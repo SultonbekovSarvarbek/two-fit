@@ -477,7 +477,7 @@ function buyView(view) {
 function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, price: String(l.price), description: l.description,
-        name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: true }
+        name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: true }  // shot: an earlier screenshot stays attached
     : { id: null, city: "", tariff: "", end_date: "", price: "", description: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
 
@@ -522,31 +522,6 @@ function sellForm(d, onDone) {
   const drawCounter = () => { counter.textContent = desc.value.length + "/" + L.desc_max; };
   desc.addEventListener("input", drawCounter);
 
-  // Screenshot: uploaded right away, the form keeps only a signed reference.
-  const file = h("input", { type: "file", accept: "image/*", hidden: true });
-  const shotRow = h("div", { class: "row" });
-  const drawShot = (loading) => {
-    shotRow.classList.remove("invalid");
-    shotRow.replaceChildren(
-      h("div", { class: "grow" }, h("div", null, T("app.sell.shot")),
-        h("div", { class: "small muted" }, loading ? T("app.sell.shot_loading") : d.shot ? T("app.sell.shot_ok") : T("app.sell.shot_hint"))),
-      loading ? "" : d.shot
-        ? h("button", { class: "btn small danger", type: "button", onclick: () => { d.shot = null; drawShot(); } }, T("app.sell.shot_remove"))
-        : h("button", { class: "btn small", type: "button", onclick: () => file.click() }, T("app.sell.shot_add")));
-  };
-  file.addEventListener("change", async () => {
-    const picked = file.files[0];
-    file.value = "";
-    if (!picked) return;
-    drawShot(true);
-    try {
-      const body = new FormData();
-      body.append("file", picked);
-      d.shot = await api("POST", "screenshot", body);
-    } catch (err) { haptic("error"); toast(err.message); }
-    drawShot();
-  });
-
   const name = bind(h("input", { type: "text", autocomplete: "name", maxLength: L.name_max, value: d.name }), "name");
   const phone = bind(h("input", { type: "tel", autocomplete: "tel", inputMode: "tel", placeholder: "+998 90 123 45 67", value: d.phone }), "phone");
 
@@ -559,7 +534,6 @@ function sellForm(d, onDone) {
     name: field(T("app.sell.name"), name),
     phone: field(T("app.buy.phone"), phone),
     accept: acceptRow,
-    screenshot: shotRow,
   };
   const submit = h("button", { class: "btn", type: "submit" }, T("app.sell.submit"));
   const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
@@ -582,14 +556,13 @@ function sellForm(d, onDone) {
     h("div", { class: "card" }, fields.city, fields.tariff, fields.end_date),
     h("div", { class: "card" }, fields.price), calc,
     h("div", { class: "card" }, fields.description),
-    h("div", { class: "card" }, shotRow, file),
     h("h2", null, T("app.sell.contacts")),
     h("div", { class: "card" }, fields.name, fields.phone),
     h("p", { class: "note" }, "🔒 " + T("app.sell.contacts_hint")),
     acceptRow,
     h("p", { class: "note" }, T("commission.note")),
     submit);
-  drawCalc(); drawCounter(); drawShot();
+  drawCalc(); drawCounter();
   return form;
 }
 
@@ -656,7 +629,7 @@ function mineView(view) {
       h("h2", null, "🔒 " + T("app.my.private")),
       h("div", { class: "card rows" },
         h("div", null, h("span", { class: "k" }, l.seller_name), h("span", { class: "v num" }, l.seller_phone)),
-        h("div", null, h("span", { class: "k" }, T(l.has_screenshot ? "app.my.shot_yes" : "app.my.shot_no")))),
+        l.has_screenshot ? h("div", null, h("span", { class: "k" }, T("app.my.shot_yes"))) : null),
       h("div", { class: "stack", style: "margin-top:20px" },
         l.can_edit ? h("button", { class: "btn", type: "button", onclick: () => go({ name: "edit", listing: l }) }, T("app.my.edit")) : null,
         l.can_report ? act("app.my.report", "app.my.report_q", "report", "app.my.report_done") : null,
