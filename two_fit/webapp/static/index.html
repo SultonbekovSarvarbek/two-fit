@@ -118,6 +118,16 @@ p { margin: 0; }
 .item .price::after { bottom: -22px; }
 .item .price small { display: block; font: 400 12px/1.3 var(--body); letter-spacing: 0; color: var(--hint); margin-top: 2px; }
 .badge { display: inline-block; font-size: 12.5px; padding: 3px 9px; border-radius: 999px; background: var(--page); margin-top: 6px; }
+/* «cheapest» flag sitting on the top-right edge of the first catalog card */
+.best { position: relative; }
+.stack > .best { margin-top: 20px; }
+.best .flag {
+  position: absolute; top: -11px; right: 14px; z-index: 1; display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 11px 4px 9px; border-radius: 999px; background: var(--lime); color: var(--ink);
+  font: 700 12px/1.2 var(--body); letter-spacing: 0.01em; white-space: nowrap;
+  box-shadow: 0 0 0 3px var(--page), 0 4px 12px rgba(21, 21, 15, 0.18);
+}
+.best .flag svg { width: 13px; height: 13px; fill: currentColor; }
 /* price type: negotiable stands out in lime, fixed stays quiet */
 .badge.ptype { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; letter-spacing: 0.01em; padding: 4px 10px 4px 8px; }
 .badge.ptype::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -274,7 +284,8 @@ function T(key, vars) {
   return tpl.replace(/\{(\w+)\}/g, (_, k) => (all[k] != null ? all[k] : ""));
 }
 const money = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-const dmy = (iso) => iso.split("-").reverse().join(".");
+// «7 мая 2027»: plain numbers like 07.05.2027 confuse people.
+const dmy = (iso) => { const [y, m, d] = iso.split("-").map(Number); return d + " " + T("app.months").split(",")[m - 1] + " " + y; };
 const city = (code) => T("city." + code);
 const fee = (price) => Math.floor((price * B.vars.percent + 50) / 100);
 
@@ -364,6 +375,11 @@ function listingRow(l, onclick, extra) {
       extra || priceBadge(l)),
     h("div", { class: "price num" }, money(l.price), h("small", null, T("app.sum"))));
 }
+function cheapestFlag() {
+  const flag = h("span", { class: "flag" }, T("app.badge.cheapest"));
+  flag.insertAdjacentHTML("afterbegin", '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>');
+  return flag;
+}
 const priceBadge = (l) => h("span", { class: "badge ptype " + (l.price_negotiable ? "deal" : "fixed") },
   T(l.price_negotiable ? "app.badge.negotiable" : "app.badge.fixed"));
 const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.negotiable") : "");
@@ -394,7 +410,12 @@ function catalogView(view, rev) {
   const more = c.items.length < c.total
     ? h("button", { class: "btn ghost", type: "button", onclick: (e) => busy(e.currentTarget, async () => { await fetchCatalog(false); render(); }) }, T("app.catalog.more"))
     : null;
-  return [head, chips, h("div", { class: "stack" }, c.items.map((l) => listingRow(l, () => go({ name: "listing", id: l.id }))), more)];
+  // Sorted cheapest first, so the first card is the cheapest in the current city filter.
+  const rows = c.items.map((l, i) => {
+    const row = listingRow(l, () => go({ name: "listing", id: l.id }));
+    return i === 0 && c.total > 1 ? h("div", { class: "best" }, row, cheapestFlag()) : row;
+  });
+  return [head, chips, h("div", { class: "stack" }, rows, more)];
 }
 
 function publicRows(l) {

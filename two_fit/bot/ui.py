@@ -29,6 +29,12 @@ def fmt_date(iso: str) -> str:
     return date.fromisoformat(iso).strftime("%d.%m.%Y")
 
 
+def fmt_day(ctx: Ctx, iso: str) -> str:
+    """«7 мая 2027» / «7 май 2027» — plain numbers like 07.05.2027 confuse people."""
+    d = date.fromisoformat(iso)
+    return f"{d.day} {ctx.t('app.months').split(',')[d.month - 1]} {d.year}"
+
+
 def fmt_dt(iso: str | None) -> str:
     if not iso:
         return "—"
@@ -118,7 +124,7 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
         id=listing_id,
         city=esc(ctx.i18n.city(ctx.lang, data["city"])),
         tariff=esc(data["tariff"]),
-        date=fmt_date(data["end_date"]),
+        date=fmt_day(ctx, data["end_date"]),
         price=fmt_money(data["price"]),
     )
     if data.get("price_negotiable"):

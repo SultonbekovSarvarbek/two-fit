@@ -40,6 +40,9 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     assert "Two Fit комиссияси (10%): 200 000" in pt and "Сизга қолади: <b>1 800 000" in pt
     assert "Фақат администратор кўради" in pt and "+998901112233" in pt
     assert "келишилади" not in pt
+    end = today_local() + timedelta(days=200)
+    month = "январь феврал март апрел май июн июл август сентябр октябр ноябр декабр".split()[end.month - 1]
+    assert f"Амал қилиш муддати: {end.day} {month} {end.year} гача" in pt  # words, not 07.05.2027
     toggled = texts(await h.click(uid, "sl:negotiable:"))
     assert "сўм</b> · <i>келишилади</i>" in toggled
     await h.click(uid, "sl:negotiable:")  # back to a fixed price
