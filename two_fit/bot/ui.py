@@ -121,6 +121,8 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
         date=fmt_date(data["end_date"]),
         price=fmt_money(data["price"]),
     )
+    if data.get("price_negotiable"):
+        text += ctx.t("card.negotiable")
     if data.get("description"):
         text += ctx.t("card.desc", desc=esc(data["description"]))
     return text

@@ -127,8 +127,11 @@ def preview_text(ctx: Ctx, data: dict) -> str:
     return "\n\n".join(parts)
 
 
-def preview_kb(ctx: Ctx, accepted: bool) -> InlineKeyboardMarkup:
+def preview_kb(ctx: Ctx, data: dict) -> InlineKeyboardMarkup:
+    accepted = bool(data.get("accepted"))
+    negotiable = bool((data.get("draft") or {}).get("price_negotiable"))
     return kb(
+        [btn(ctx.t("sell.negotiable_on" if negotiable else "sell.negotiable_off"), SellCb(action="negotiable"))],
         [btn(ctx.t("sell.accept_on" if accepted else "sell.accept_off"), SellCb(action="accept"))],
         [btn(ctx.t("sell.send"), SellCb(action="send"))],
         [btn(ctx.t("sell.edit"), SellCb(action="edit")), btn(ctx.t("sell.cancel"), SellCb(action="cancel"))],
@@ -139,7 +142,7 @@ async def show_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.set_state(SellForm.preview)
     await state.update_data(single=False)
     data = await state.get_data()
-    await message.answer(preview_text(ctx, data), reply_markup=preview_kb(ctx, bool(data.get("accepted"))))
+    await message.answer(preview_text(ctx, data), reply_markup=preview_kb(ctx, data))
 
 
 # ------------------------------------------------------------------ entry points
@@ -154,7 +157,8 @@ async def menu_sell(message: Message, state: FSMContext, ctx: Ctx) -> None:
 async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dict) -> None:
     """Called from «My listings»: open the preview of an existing listing for editing."""
     draft = {k: listing[k] for k in (
-        "city", "tariff", "end_date", "price", "description", "screenshot_file_id", "seller_name", "seller_phone"
+        "city", "tariff", "end_date", "price", "price_negotiable", "description", "screenshot_file_id",
+        "seller_name", "seller_phone",
     )}
     await state.clear()
     await state.set_data({
@@ -349,7 +353,17 @@ async def on_accept(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     accepted = not data.get("accepted")
     await state.update_data(accepted=accepted)
     await call.answer()
-    await call.message.edit_reply_markup(reply_markup=preview_kb(ctx, accepted))
+    await call.message.edit_reply_markup(reply_markup=preview_kb(ctx, await state.get_data()))
+
+
+@router.callback_query(SellForm.preview, SellCb.filter(F.action == "negotiable"))
+async def on_negotiable(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
+    """Fixed or negotiable price: shown to buyers next to the price, the commission math is unchanged."""
+    data = await state.get_data()
+    await draft_update(state, price_negotiable=not (data.get("draft") or {}).get("price_negotiable"))
+    data = await state.get_data()
+    await call.answer()
+    await call.message.edit_text(preview_text(ctx, data), reply_markup=preview_kb(ctx, data))
 
 
 @router.callback_query(SellForm.preview, SellCb.filter(F.action == "edit"))

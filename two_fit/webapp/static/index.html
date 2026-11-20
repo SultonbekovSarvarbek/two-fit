@@ -148,7 +148,7 @@ p { margin: 0; }
 
 /* forms */
 .field { display: block; padding: 11px 16px 12px; position: relative; }
-.field + .field { border-top: 1px solid var(--line); }
+.field + .field, .field + .check { border-top: 1px solid var(--line); }
 .field > span { display: block; font-size: 12.5px; color: var(--hint); margin-bottom: 2px; }
 .field input, .field select, .field textarea {
   display: block; width: 100%; border: 0; outline: 0; background: transparent; padding: 2px 0; margin: 0;
@@ -354,8 +354,9 @@ function listingRow(l, onclick, extra) {
       h("div", { class: "title" }, l.tariff),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
       extra),
-    h("div", { class: "price num" }, money(l.price), h("small", null, T("app.sum"))));
+    h("div", { class: "price num" }, money(l.price), h("small", null, sumLabel(l))));
 }
+const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.negotiable") : "");
 
 async function fetchCatalog(reset) {
   const c = S.cat;
@@ -395,7 +396,7 @@ function publicRows(l) {
 function priceHero(l) {
   return h("div", { class: "card hero" },
     h("div", { class: "label" }, T("app.f.price")),
-    h("div", { class: "value num" }, money(l.price) + " ", h("small", null, T("app.sum"))));
+    h("div", { class: "value num" }, money(l.price) + " ", h("small", null, sumLabel(l))));
 }
 
 function listingView(view, rev) {
@@ -476,9 +477,9 @@ function buyView(view) {
 
 function newDraft(l) {
   return l
-    ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, price: String(l.price), description: l.description,
+    ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
         name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: true }  // shot: an earlier screenshot stays attached
-    : { id: null, city: "", tariff: "", end_date: "", price: "", description: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
+    : { id: null, city: "", tariff: "", end_date: "", price: "", negotiable: false, description: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
 
 function sellForm(d, onDone) {
@@ -516,6 +517,9 @@ function sellForm(d, onDone) {
     drawCalc();
   });
   accept.addEventListener("change", () => { d.accept = accept.checked; acceptRow.classList.remove("invalid"); });
+  const negotiable = h("input", { type: "checkbox", checked: d.negotiable });
+  negotiable.addEventListener("change", () => { d.negotiable = negotiable.checked; });
+  const negotiableRow = h("label", { class: "check" }, negotiable, h("span", null, T("app.sell.negotiable")));
 
   const counter = h("span", { class: "counter num" });
   const desc = bind(h("textarea", { maxLength: L.desc_max, placeholder: T("app.sell.desc_ph"), value: d.description }), "description");
@@ -541,8 +545,8 @@ function sellForm(d, onDone) {
     if (submit.disabled) return;
     if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
     submit.disabled = true;
-    const body = { city: d.city, tariff: d.tariff, end_date: d.end_date, price: d.price, description: d.description,
-                   name: d.name, phone: d.phone, accepted_price: Number(d.price), screenshot: d.shot };
+    const body = { city: d.city, tariff: d.tariff, end_date: d.end_date, price: d.price, price_negotiable: d.negotiable,
+                   description: d.description, name: d.name, phone: d.phone, accepted_price: Number(d.price), screenshot: d.shot };
     try {
       const res = d.id ? await api("PUT", "listings/" + d.id, body) : await api("POST", "listings", body);
       B.user = { name: d.name.trim(), phone: d.phone.trim() };
@@ -554,7 +558,7 @@ function sellForm(d, onDone) {
     }
   } },
     h("div", { class: "card" }, fields.city, fields.tariff, fields.end_date),
-    h("div", { class: "card" }, fields.price), calc,
+    h("div", { class: "card" }, fields.price, negotiableRow), calc,
     h("div", { class: "card" }, fields.description),
     h("h2", null, T("app.sell.contacts")),
     h("div", { class: "card" }, fields.name, fields.phone),
@@ -623,7 +627,7 @@ function mineView(view) {
       publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
       h("div", { class: "card rows" },
-        h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(l.price) + " " + T("app.sum"))),
+        h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(l.price) + " " + sumLabel(l))),
         h("div", null, h("span", { class: "k" }, T("app.c.fee")), h("span", { class: "v num" }, "− " + money(l.commission) + " " + T("app.sum"))),
         h("div", { class: "strong" }, h("span", { class: "k" }, T("app.c.net")), h("span", { class: "v num" }, money(l.net) + " " + T("app.sum")))),
       h("h2", null, "🔒 " + T("app.my.private")),

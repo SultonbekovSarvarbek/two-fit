@@ -109,6 +109,18 @@ async def test_bootstrap_language_and_switch(h, api):
 
 
 # ------------------------------------------------------------------ selling
+async def test_negotiable_price_is_saved_and_shown(h, api):
+    fixed = await publish(h, api)
+    negotiable = await publish(h, api, price_negotiable=True)
+    assert (await h.repo.get_listing(fixed))["price_negotiable"] == 0
+    assert (await h.repo.get_listing(negotiable))["price_negotiable"] == 1
+    _, cat = await api.call("GET", "/api/catalog", BUYER)
+    assert {x["id"]: x["price_negotiable"] for x in cat["items"]} == {fixed: False, negotiable: True}
+    # Only a real JSON true counts; the flag can be switched off on edit
+    status, _ = await api.call("PUT", f"/api/listings/{negotiable}", SELLER, draft(price_negotiable="yes"))
+    assert status == 200 and (await h.repo.get_listing(negotiable))["price_negotiable"] == 0
+
+
 async def test_create_listing_goes_to_moderation_and_notifies_admin(h, api):
     await h.repo.touch_user(ADMIN, "boss", "Boss")
     status, data = await api.call("POST", "/api/listings", SELLER, draft())
@@ -177,7 +189,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     assert status == 200 and cat["total"] == 2
     assert {c["code"]: c["count"] for c in cat["cities"]} == {"tashkent": 1, "samarkand": 1}
     for item in cat["items"]:
-        assert set(item) == {"id", "city", "tariff", "end_date", "price", "description"}
+        assert set(item) == {"id", "city", "tariff", "end_date", "price", "price_negotiable", "description"}
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]
 
