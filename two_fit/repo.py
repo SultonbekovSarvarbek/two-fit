@@ -371,7 +371,7 @@ class Repo:
             params["city"] = city
         total = await self._scalar(f"SELECT COUNT(*) FROM listings WHERE {where}", params)
         rows = await self._all(
-            f"SELECT * FROM listings WHERE {where} ORDER BY published_at DESC, id DESC LIMIT :lim OFFSET :off",
+            f"SELECT * FROM listings WHERE {where} ORDER BY price ASC, published_at DESC, id DESC LIMIT :lim OFFSET :off",
             {**params, "lim": limit, "off": offset},
         )
         return rows, total

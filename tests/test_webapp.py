@@ -109,6 +109,14 @@ async def test_bootstrap_language_and_switch(h, api):
 
 
 # ------------------------------------------------------------------ selling
+async def test_catalog_is_sorted_cheapest_first(h, api):
+    mid = await publish(h, api, price="2 000 000", accepted_price=2_000_000)
+    high = await publish(h, api, price="5 000 000", accepted_price=5_000_000)
+    low = await publish(h, api, price="900 000", accepted_price=900_000)
+    _, cat = await api.call("GET", "/api/catalog", BUYER)
+    assert [x["id"] for x in cat["items"]] == [low, mid, high]
+
+
 async def test_negotiable_price_is_saved_and_shown(h, api):
     fixed = await publish(h, api)
     negotiable = await publish(h, api, price_negotiable=True)
