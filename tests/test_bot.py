@@ -39,6 +39,10 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     pt = texts(preview)
     assert "Two Fit комиссияси (10%): 200 000" in pt and "Сизга қолади: <b>1 800 000" in pt
     assert "Фақат администратор кўради" in pt and "+998901112233" in pt
+    assert "келишилади" not in pt
+    toggled = texts(await h.click(uid, "sl:negotiable:"))
+    assert "сўм</b> · <i>келишилади</i>" in toggled
+    await h.click(uid, "sl:negotiable:")  # back to a fixed price
     # Send without accepting the commission is refused
     refused = await h.click(uid, "sl:send:")
     assert any("комиссияга розилигингизни" in a for a in alerts(refused))

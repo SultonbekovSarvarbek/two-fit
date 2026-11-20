@@ -65,7 +65,9 @@ class ApiError(Exception):
 # ------------------------------------------------------------------ serializers
 def public_view(listing: dict[str, Any]) -> dict[str, Any]:
     """Only what a buyer may see — never the seller's identity, contacts or screenshot."""
-    return {k: listing[k] for k in ("id", "city", "tariff", "end_date", "price", "description")}
+    view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "price", "description")}
+    view["price_negotiable"] = bool(listing["price_negotiable"])
+    return view
 
 
 def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
@@ -289,6 +291,7 @@ class WebApp:
             "tariff": self._field(ctx, "tariff", parse_tariff, body.get("tariff")),
             "end_date": self._field(ctx, "end_date", self._iso_date, body.get("end_date"), today_local()),
             "price": self._field(ctx, "price", parse_price, raw_price),
+            "price_negotiable": body.get("price_negotiable") is True,
             "description": self._field(ctx, "description", parse_description, body.get("description") or ""),
             "seller_name": self._field(ctx, "name", parse_name, body.get("name")),
             "seller_phone": self._field(ctx, "phone", normalize_phone, body.get("phone")),

@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS listings (
     tariff                    TEXT NOT NULL,
     end_date                  TEXT NOT NULL,      -- YYYY-MM-DD
     price                     INTEGER NOT NULL CHECK (price > 0),
+    price_negotiable          INTEGER NOT NULL DEFAULT 0,  -- 1: price is open to negotiation
     description               TEXT NOT NULL DEFAULT '',
     screenshot_file_id        TEXT,
     seller_name               TEXT NOT NULL,
@@ -177,6 +178,14 @@ class Repo:
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode = WAL")
         await self._db.executescript(SCHEMA)
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        """Columns added after the first release: CREATE TABLE IF NOT EXISTS does not add them."""
+        async with self.db.execute("PRAGMA table_info(listings)") as cur:
+            columns = {r[1] for r in await cur.fetchall()}
+        if "price_negotiable" not in columns:
+            await self.db.execute("ALTER TABLE listings ADD COLUMN price_negotiable INTEGER NOT NULL DEFAULT 0")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -278,12 +287,13 @@ class Repo:
         async with self.tx():
             ts = now_iso()
             cur = await self.db.execute(
-                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, price, description,
-                       screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
+                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, price, price_negotiable,
+                       description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
                        status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], draft["tariff"], draft["end_date"], draft["price"],
+                    int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, ts, ts,
                 ),
@@ -301,13 +311,13 @@ class Repo:
             if listing["status"] not in LS.SELLER_EDITABLE:
                 raise RepoError("bad_status")
             await self.db.execute(
-                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, price=?, description=?,
+                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?,
                        status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
                    WHERE id=?""",
                 (
                     lang, draft["city"], draft["tariff"], draft["end_date"], draft["price"],
-                    draft.get("description") or "", draft.get("screenshot_file_id"),
+                    int(bool(draft.get("price_negotiable"))), draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, now_iso(), listing_id,
                 ),
             )

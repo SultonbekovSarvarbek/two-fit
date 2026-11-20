@@ -271,3 +271,23 @@ async def test_data_survives_restart(tmp_path):
     assert (await r2.get_listing(lid))["status"] == LS.PENDING
     assert await r2.fsm_get("k") == ("SellForm:price", {"draft": {"city": "tashkent"}})
     await r2.close()
+
+
+async def test_old_database_gets_price_negotiable_column(tmp_path):
+    import aiosqlite
+
+    from two_fit.repo import SCHEMA
+    path = tmp_path / "old.db"
+    old_schema = "\n".join(l for l in SCHEMA.splitlines() if "price_negotiable" not in l)
+    async with aiosqlite.connect(path) as db:  # a database from before the column existed
+        await db.executescript(old_schema)
+    r = Repo(path, 10)
+    await r.connect()
+    try:
+        await r.touch_user(1, "u", "U")
+        lid = await r.create_listing(1, "ru", draft(price_negotiable=True))
+        assert (await r.get_listing(lid))["price_negotiable"] == 1
+        await r.close()
+        await r.connect()  # running the migration twice is harmless
+    finally:
+        await r.close()
