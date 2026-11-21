@@ -395,9 +395,10 @@ async function fetchCatalog(reset) {
 function catalogView(view, rev) {
   const c = S.cat;
   const head = h("h1", null, T("app.catalog.title"));
+  const lang = langSwitch();
   if (!c.loaded) {
     load(rev, fetchCatalog(true), render);
-    return [head, spinner()];
+    return [head, lang, spinner()];
   }
   const pick = (code) => { c.city = code; c.loaded = false; render(); };
   const chips = c.cities.length > 1 || c.city ? h("div", { class: "chips" },
@@ -405,7 +406,7 @@ function catalogView(view, rev) {
     c.cities.map((x) => h("button", { class: "chip", type: "button", "aria-pressed": String(c.city === x.code), onclick: () => pick(x.code) },
       city(x.code), h("span", { class: "n num" }, x.count)))) : null;
   if (!c.items.length) {
-    return [head, chips, h("div", { class: "empty" }, h("p", null, T("app.catalog.empty")), operatorBtn())];
+    return [head, lang, chips, h("div", { class: "empty" }, h("p", null, T("app.catalog.empty")), operatorBtn())];
   }
   const more = c.items.length < c.total
     ? h("button", { class: "btn ghost", type: "button", onclick: (e) => busy(e.currentTarget, async () => { await fetchCatalog(false); render(); }) }, T("app.catalog.more"))
@@ -415,7 +416,7 @@ function catalogView(view, rev) {
     const row = listingRow(l, () => go({ name: "listing", id: l.id }));
     return i === 0 && c.total > 1 ? h("div", { class: "best" }, row, cheapestFlag()) : row;
   });
-  return [head, chips, h("div", { class: "stack" }, rows, more)];
+  return [head, lang, chips, h("div", { class: "stack" }, rows, more)];
 }
 
 function publicRows(l) {
@@ -675,13 +676,18 @@ function mineView(view) {
 }
 
 /* ---------------------------------------------------------------- more */
-function moreView() {
+function langSwitch() {
   const setLang = (code, button) => busy(button, async () => {
     if (code === B.lang) return;
     B = await api("POST", "lang", { lang: code });
     document.documentElement.lang = B.lang;
     render();
   });
+  return h("div", { class: "card seg", style: "margin-bottom:14px", role: "group", "aria-label": T("app.more.lang") }, B.langs.map((x) =>
+    h("button", { type: "button", "aria-pressed": String(x.code === B.lang), onclick: (e) => setLang(x.code, e.currentTarget) }, x.name)));
+}
+
+function moreView() {
   return [
     h("h2", { style: "margin-top:0" }, T("app.more.how")),
     h("div", { class: "card" }, h("ol", { class: "steps" }, [1, 2, 3, 4, 5, 6].map((i) => h("li", null, T("app.how." + i))))),
@@ -689,9 +695,6 @@ function moreView() {
     h("p", { class: "note" }, T("app.how.note2")),
     h("h2", null, T("app.more.support")),
     h("div", { class: "stack" }, h("p", { class: "note", style: "margin-top:0" }, T("app.more.support_text")), operatorBtn(true)),
-    h("h2", null, T("app.more.lang")),
-    h("div", { class: "card seg" }, B.langs.map((x) =>
-      h("button", { type: "button", "aria-pressed": String(x.code === B.lang), onclick: (e) => setLang(x.code, e.currentTarget) }, x.name))),
   ];
 }
 
