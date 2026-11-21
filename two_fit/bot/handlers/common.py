@@ -6,6 +6,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
+from ...pricing import DISCOUNT_PERCENT
 from ..callbacks import NOOP, LangCb
 from ..context import Ctx
 from ..middlewares import Btn
@@ -81,7 +82,9 @@ async def menu_support(message: Message, state: FSMContext, ctx: Ctx) -> None:
 async def menu_how(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     await message.answer(
-        ctx.t("how.text"), reply_markup=kb([btn(ctx.t("support.btn"), url=ctx.cfg.support_url)])
+        ctx.t("how.text", price_note=ctx.t("how.price", discount=DISCOUNT_PERCENT) if ctx.cfg.auto_price else "",
+              pay_note=ctx.t("how.pay")),
+        reply_markup=kb([btn(ctx.t("support.btn"), url=ctx.cfg.support_url)]),
     )
 
 

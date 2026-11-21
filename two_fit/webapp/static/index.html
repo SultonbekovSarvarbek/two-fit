@@ -184,6 +184,8 @@ p { margin: 0; }
 .hero .month-cost { font-size: 14px; font-weight: 500; color: var(--ink); opacity: 1; margin-top: 12px; line-height: 1.4; }
 .month-cost b { font-weight: 700; }
 .hero .month-cost b { font-size: 16px; }
+/* «Купите сразу и сэкономьте ≈ 2 038 000 сум»: the reason to buy now, set apart on the price card */
+.save-cta { margin-top: 10px; padding: 9px 12px; border-radius: 12px; background: rgba(21, 21, 15, 0.1); font-weight: 700; }
 .month-cost.warn { color: var(--danger); font-weight: 600; opacity: 1; }
 .hero .month-cost.warn { color: #8A1C12; }
 
@@ -483,7 +485,8 @@ const monthCost = (l, big) => {
   if (suspicious(l)) return h("div", { class: "month-cost warn" }, T("app.month_suspicious"));
   const vars = { month: money(m.month), fit_month: money(m.fit_month), saving: m.saving, saved: money(m.saved) };
   return big
-    ? h("div", { class: "month-cost num" }, h("b", null, T("app.mc.hero_title", vars)), h("div", null, T("app.mc.hero_text", vars)))
+    ? h("div", { class: "month-cost num" }, h("b", null, T("app.mc.hero_title", vars)), h("div", null, T("app.mc.hero_text", vars)),
+        m.saved ? h("div", { class: "save-cta" }, "💸 " + T("app.mc.hero_save", vars)) : null)
     : h("div", { class: "month-cost num" }, T("app.mc.row_text", vars));  // the saving itself is in the badge
 };
 const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.negotiable") : "");
@@ -565,6 +568,7 @@ function listingView(view, rev) {
       priceHero(l), usageBar(l, true), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
       action,
+      h("p", { class: "note" }, "💳 " + T("app.buy.pay_once")),
       h("p", { class: "note" }, T("app.buy.free") + " " + T("app.op_hint", { id: l.id }))),
   ];
 }
@@ -619,7 +623,7 @@ function buyView(view) {
       submit.disabled = false;
       showFieldError(fields, err);
     }
-  } }, h("div", { class: "card" }, fields.name, fields.phone), h("p", { class: "note" }, "🔒 " + T("app.buy.privacy")), submit);
+  } }, h("div", { class: "card" }, fields.name, fields.phone), h("p", { class: "note" }, "💳 " + T("app.buy.pay_once")), h("p", { class: "note" }, "🔒 " + T("app.buy.privacy")), submit);
   return [h("h1", null, T("app.buy.title", { id: view.id })), form];
 }
 
@@ -988,7 +992,7 @@ function langSwitch() {
 function moreView() {
   return [
     h("h2", { style: "margin-top:0" }, T("app.more.how")),
-    h("div", { class: "card" }, h("ol", { class: "steps" }, [1, 2, 3, 4, 5, 6].map((i) => h("li", null, T("app.how." + i))))),
+    h("div", { class: "card" }, h("ol", { class: "steps" }, ["1", B.vars.auto_price ? "price" : null, "2", "3", "4", "pay", "5", "6"].filter(Boolean).map((i) => h("li", null, T("app.how." + i))))),
     h("p", { class: "note" }, T("app.how.note1")),
     h("p", { class: "note" }, T("app.how.note2")),
     h("h2", null, T("app.more.support")),

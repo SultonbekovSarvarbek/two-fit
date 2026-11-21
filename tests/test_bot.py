@@ -304,7 +304,8 @@ async def test_installment_wizard_and_card(h):
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
-    assert ("💳 <b>Рассрочка:</b> дальше покупатель сам платит 500\xa0000 сум/мес × 9 (всего ещё 4\xa0500\xa0000 сум)"
+    assert ("💳 <b>Рассрочка:</b> цену объявления покупатель платит сразу, а оставшиеся платежи 1Fit вносит сам — "
+            "500\xa0000 сум/мес × 9 (всего ещё 4\xa0500\xa0000 сум)"
             in preview)
     assert "❄️ Заморозка: осталось 20 дн." in preview
     await h.click(SELLER, "sl:accept:")

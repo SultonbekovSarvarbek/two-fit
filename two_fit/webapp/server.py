@@ -27,7 +27,7 @@ from ..config import Config
 from ..money import fmt_money, round_k
 from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
-from ..pricing import advise
+from ..pricing import DISCOUNT_PERCENT, advise
 from ..usage import remaining, usage
 from ..validators import (
     DESC_MAX,
@@ -239,7 +239,8 @@ class WebApp:
             "texts": texts,
             "vars": {"operator": self.cfg.operator, "percent": self.cfg.commission_percent,
                      "promo_percent": self.cfg.promo_commission_percent, "fees": ctx.fees(),
-                     "promo_enabled": self.cfg.promo_enabled, "auto_price": self.cfg.auto_price},
+                     "promo_enabled": self.cfg.promo_enabled, "auto_price": self.cfg.auto_price,
+                     "discount": DISCOUNT_PERCENT},
             "support_url": self.cfg.support_url,
             "cities": list(CITIES),
             "user": {"name": ctx.user.get("contact_name") or "", "phone": ctx.user.get("contact_phone") or ""},

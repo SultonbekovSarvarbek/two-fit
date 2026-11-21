@@ -125,7 +125,7 @@ async def test_card_shows_the_cost_per_month(h):
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
     # In words: «it comes to … a month — 1Fit charges … a month; … cheaper, you save ≈ …», round sums
-    assert "Выходит <b>" in preview and "сум в месяц</b> — в 1Fit" in preview and "экономия ≈" in preview
+    assert "Выходит <b>" in preview and "сум в месяц</b> — в 1Fit" in preview and "Купите сразу и сэкономьте ≈" in preview
     assert "000 сум в месяц</b>" in preview
 
 
@@ -299,7 +299,7 @@ async def test_bot_card_flags_a_suspicious_price(h):
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
-    assert "Очень низкая цена" in preview and "экономия" not in preview
+    assert "Очень низкая цена" in preview and "сэкономьте" not in preview
     assert "Использовано" in preview  # the 12-month tariff gives «used … of 12 months» without a start date
 
 
@@ -527,3 +527,28 @@ async def test_listings_get_the_automatic_flag(tmp_path):
             assert (await h.repo.get_listing(made["id"]))["price_auto"] == 1
     finally:
         await h.stop()
+
+
+async def test_how_it_works_explains_the_automatic_price(tmp_path):
+    for auto in (True, False):
+        h = await Harness(tmp_path / f"how-{auto}.db", auto_price=auto).start()
+        try:
+            await h.send(SELLER, "/start")
+            await h.click(SELLER, "lang:ru")
+            how = texts(await h.send(SELLER, "ℹ️ Как это работает"))
+            assert ("Как считается цена" in how) is auto
+            if auto:
+                assert "текущие цены 1Fit" in how and "на 30% дешевле" in how and "Комиссия Two Fit уже внутри цены" in how
+                assert how.index("Как считается цена") < how.index("Покупатель отдельной комиссии")  # right after the steps
+        finally:
+            await h.stop()
+
+
+async def test_buyers_are_told_to_pay_at_once(h, api):  # noqa: F811
+    """The listing price is paid at once and in full: no monthly parts. 1Fit's own installments stay monthly."""
+    await h.send(SELLER, "/start")
+    await h.click(SELLER, "lang:ru")
+    how = texts(await h.send(SELLER, "ℹ️ Как это работает"))
+    assert "сразу и целиком" in how and "частями по месяцам мы не принимаем" in how
+    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+    assert "частями по месяцам" in boot["texts"]["app.how.pay"] and "сразу и целиком" in boot["texts"]["app.buy.pay_once"]
