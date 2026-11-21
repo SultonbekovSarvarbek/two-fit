@@ -57,7 +57,7 @@ def load_config() -> Config:
         admin_ids=_parse_ids(os.getenv("ADMIN_IDS", "")),
         support_username=os.getenv("SUPPORT_USERNAME", "s_sarvar").strip().lstrip("@"),
         db_path=db_path,
-        commission_percent=int(os.getenv("COMMISSION_PERCENT", "10")),
+        commission_percent=int(os.getenv("COMMISSION_PERCENT", "15")),
         page_size=int(os.getenv("PAGE_SIZE", "5")),
         welcome_image=BASE_DIR / "assets" / "two-fit-description-640x360.png",
         logo=BASE_DIR / "assets" / "two-fit-logo.png",

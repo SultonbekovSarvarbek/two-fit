@@ -87,11 +87,12 @@ def public_view(listing: dict[str, Any]) -> dict[str, Any]:
 def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
     status = listing["status"]
     expired = status == LS.APPROVED and Repo.is_expired(listing)
-    c = ctx.commission(listing["price"], listing["kind"])
+    c = ctx.commission(listing["price"], percent=ctx.repo.listing_percent(listing))
     return {
         **public_view(listing),
         "promo_code": listing["promo_code"],
-        "percent": c.percent,
+        "percent": c.percent,  # the rate this listing was accepted at
+        "rate_changed": c.percent != ctx.percent(listing["kind"]),  # editing means accepting today's rate
         "status": "expired" if expired else status,
         "reject_reason": listing["reject_reason"] if status == LS.REJECTED else None,
         "sale_reported": bool(listing["sale_reported_at"]) and status in (LS.APPROVED, LS.RESERVED),

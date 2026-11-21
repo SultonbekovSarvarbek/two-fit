@@ -421,3 +421,13 @@ async def test_sell_form_needs_no_contacts(h, api):
     assert "📞 —" in text and f"@user{SELLER}" in text
     status, _ = await api.call("PUT", f"/api/listings/{data['id']}", SELLER, body)
     assert status == 200 and (await h.repo.get_listing(data["id"]))["seller_name"] == f"Name{SELLER}"
+
+
+async def test_editing_after_a_rate_change_asks_to_accept_again(h, api):
+    lid = await publish(h, api)  # accepted at the harness rate, 10%
+    await h.repo.db.execute("UPDATE listings SET commission_percent=5 WHERE id=?", (lid,))  # as if accepted earlier at 5%
+    _, mine = await api.call("GET", "/api/my", SELLER)
+    own = mine["items"][0]
+    assert own["percent"] == 5 and own["rate_changed"] is True
+    await api.call("PUT", f"/api/listings/{lid}", SELLER, draft())
+    assert (await h.repo.get_listing(lid))["commission_percent"] == 10  # saving accepts today's rate

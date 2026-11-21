@@ -253,8 +253,9 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
         "mode": "edit",
         "listing_id": listing["id"],
         "draft": draft,
-        # Already accepted for this exact price; any price change resets it.
-        "accepted": listing["commission_accepted_price"] == listing["price"],
+        # Already accepted for this exact price and today's rate; a price or rate change resets it.
+        "accepted": listing["commission_accepted_price"] == listing["price"]
+        and ctx.repo.listing_percent(listing) == ctx.percent(listing["kind"]),
     })
     await message.answer(ctx.t("sell.edit_intro", id=listing["id"]))
     if draft["kind"] == LK.MEMBERSHIP and draft["paid_in_full"] is None:

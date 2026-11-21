@@ -41,11 +41,11 @@ class Ctx:
         return self.i18n.t(self.lang, key, **{**defaults, **kwargs})
 
     def percent(self, kind: str | None = None) -> int:
-        """10% for a membership, 30% for a promo code."""
+        """Today's rate: 15% for a membership, 30% for a promo code."""
         return self.cfg.promo_commission_percent if kind == "promo" else self.cfg.commission_percent
 
-    def commission(self, price: int, kind: str | None = None) -> Commission:
-        return calc_commission(price, self.percent(kind))
+    def commission(self, price: int, kind: str | None = None, percent: int | None = None) -> Commission:
+        return calc_commission(price, percent or self.percent(kind))
 
     def for_lang(self, lang: str | None, user_id: int = 0) -> "Ctx":
         """Same context, but speaking another user's language (for notifications)."""

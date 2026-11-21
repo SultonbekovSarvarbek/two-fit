@@ -176,8 +176,9 @@ def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:
     return ctx.t("card.installment", monthly=fmt_money(monthly), left=left, total=fmt_money(monthly * left))
 
 
-def commission_block(ctx: Ctx, price: int, kind: str | None = None) -> str:
-    c = ctx.commission(price, kind)
+def commission_block(ctx: Ctx, price: int, kind: str | None = None, percent: int | None = None) -> str:
+    """``percent``: the rate a listing was accepted at; without it, today's rate for that kind."""
+    c = ctx.commission(price, kind, percent)
     return ctx.t(
         "commission.block", price=fmt_money(c.price), commission=fmt_money(c.commission), net=fmt_money(c.net),
         percent=c.percent,

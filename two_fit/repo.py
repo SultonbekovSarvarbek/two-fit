@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS listings (
     screenshot_file_id        TEXT,
     seller_name               TEXT NOT NULL,
     seller_phone              TEXT NOT NULL,
-    commission_accepted_price INTEGER NOT NULL,   -- price the seller explicitly accepted 10% for
+    commission_accepted_price INTEGER NOT NULL,   -- price the seller explicitly accepted the commission for
+    commission_percent        INTEGER,            -- the rate the seller accepted; a later change of rate does not touch it
     status                    TEXT NOT NULL,
     reject_reason             TEXT,
     reserved_request_id       INTEGER,
@@ -175,7 +176,7 @@ def _row(row: aiosqlite.Row | None) -> dict[str, Any] | None:
 
 
 class Repo:
-    def __init__(self, db_path: str | Path, commission_percent: int = 10, promo_commission_percent: int = 30):
+    def __init__(self, db_path: str | Path, commission_percent: int = 15, promo_commission_percent: int = 30):
         self.db_path = str(db_path)
         self.commission_percent = commission_percent
         self.promo_commission_percent = promo_commission_percent
@@ -208,6 +209,11 @@ class Repo:
             await self.db.execute("ALTER TABLE listings ADD COLUMN kind TEXT NOT NULL DEFAULT 'membership'")
         if "promo_code" not in columns:
             await self.db.execute("ALTER TABLE listings ADD COLUMN promo_code TEXT")
+        if "commission_percent" not in columns:
+            # Listings made before the rate was stored were accepted at 10% (membership) and 30% (promo code).
+            await self.db.execute("ALTER TABLE listings ADD COLUMN commission_percent INTEGER")
+            await self.db.execute(
+                "UPDATE listings SET commission_percent = CASE kind WHEN 'promo' THEN 30 ELSE 10 END")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -296,8 +302,12 @@ class Repo:
         return bool(listing) and listing["status"] == LS.APPROVED and not self.is_expired(listing, today)
 
     def percent_for(self, kind: str | None) -> int:
-        """Commission: 10% for a membership, 30% for a promo code (both from the settings)."""
+        """Today's rate: 15% for a membership, 30% for a promo code (both from the settings)."""
         return self.promo_commission_percent if kind == LK.PROMO else self.commission_percent
+
+    def listing_percent(self, listing: dict[str, Any]) -> int:
+        """The rate this seller accepted, kept even if the settings change later."""
+        return listing.get("commission_percent") or self.percent_for(listing.get("kind"))
 
     @staticmethod
     def _check_draft(draft: dict[str, Any]) -> None:
@@ -349,13 +359,14 @@ class Repo:
                 """INSERT INTO listings(seller_id, lang, city, tariff, end_date, kind, promo_code, start_date,
                        paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
-                       status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       commission_percent, status, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
-                    draft["seller_name"], draft.get("seller_phone") or "", draft["price"], LS.PENDING, ts, ts,
+                    draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
+                    self.percent_for(draft.get("kind")), LS.PENDING, ts, ts,
                 ),
             )
             listing_id = cur.lastrowid
@@ -373,14 +384,15 @@ class Repo:
             await self.db.execute(
                 """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, start_date=?,
                        paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
-                       screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?,
+                       screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?, commission_percent=?,
                        status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
                    WHERE id=?""",
                 (
                     lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft), draft["price"],
                     int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
-                    draft["seller_name"], draft.get("seller_phone") or "", draft["price"], LS.PENDING, now_iso(), listing_id,
+                    draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
+                    self.percent_for(draft.get("kind")), LS.PENDING, now_iso(), listing_id,
                 ),
             )
             await self._log(listing_id, seller_id, "edited", price=draft["price"])
@@ -659,7 +671,7 @@ class Repo:
             if not listing["final_price"] or not listing["final_price_confirmed"]:
                 raise RepoError("price_not_confirmed")
             req = await self.get_request(listing["reserved_request_id"]) if listing["reserved_request_id"] else None
-            c = calc_commission(listing["final_price"], self.percent_for(listing["kind"]))
+            c = calc_commission(listing["final_price"], self.listing_percent(listing))
             ts = now_iso()
             cur = await self.db.execute(
                 """INSERT INTO deals(listing_id, request_id, seller_id, seller_name, seller_phone, buyer_id,

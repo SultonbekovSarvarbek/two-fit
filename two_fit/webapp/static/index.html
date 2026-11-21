@@ -321,7 +321,7 @@ const money = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 // «7 мая 2027»: plain numbers like 07.05.2027 confuse people.
 const dmy = (iso) => { const [y, m, d] = iso.split("-").map(Number); return d + " " + T("app.months").split(",")[m - 1] + " " + y; };
 const city = (code) => T("city." + code);
-// Two Fit commission: 10% for a membership, 30% for a promo code.
+// Two Fit commission at today's rates: 15% for a membership, 30% for a promo code.
 const pct = (kind) => (kind === "promo" ? B.vars.promo_percent : B.vars.percent);
 const fee = (price, kind) => Math.floor((price * pct(kind) + 50) / 100);
 
@@ -585,7 +585,7 @@ function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
         kind: l.kind, code: l.promo_code || "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "",
-        name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: true }  // shot: an earlier screenshot stays attached
+        name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: !l.rate_changed }  // shot: an earlier screenshot stays attached
     : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: null, code: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
 
@@ -604,7 +604,7 @@ function sellForm(d, onDone, onKind) {
   const start = bind(h("input", { type: "date", min: L.start_min, max: L.start_max, value: d.start_date }), "start_date");
   start.addEventListener("change", () => { d.start_date = start.value; });
 
-  // What is sold: a membership (10%) or a promo code (30%). Fixed once listed.
+  // What is sold: a membership (15%) or a promo code (30%). Fixed once listed.
   const kindErr = h("div", { class: "err", hidden: true });
   const kindSeg = h("div", { class: "seg", role: "group", "aria-label": T("app.f.kind") },
     ["membership", "promo"].map((k) => h("button", { type: "button", "data-kind": k, onclick: () => {
@@ -744,7 +744,7 @@ function afterSubmit(id) {
 }
 function sellView() {
   if (!S.draft) S.draft = newDraft(null);
-  // The title and the commission line follow the choice: membership 10%, promo code 30%.
+  // The title and the commission line follow the choice: membership 15%, promo code 30%.
   const title = h("h1"), intro = h("p", { class: "note", style: "margin:0 4px 14px" });
   const onKind = (kind) => {
     const key = kind === "promo" ? "promo" : kind === "membership" ? "membership" : "any";

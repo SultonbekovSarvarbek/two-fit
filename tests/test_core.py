@@ -393,3 +393,63 @@ async def test_membership_keeps_no_tariff(repo):
     assert (await repo.get_listing(lid))["tariff"] == ""  # «12 months» misled buyers about what is left
     with pytest.raises(RepoError):  # a promo code must say what it gives
         await repo.create_listing(1, "ru", draft(kind="promo", promo_code="FIT-1", tariff=""))
+
+
+async def test_rate_change_keeps_the_accepted_rate(tmp_path):
+    """Raising the rate 10% -> 15% must not charge sellers who agreed to 10%."""
+    path = tmp_path / "rate.db"
+    old = Repo(path, 10)
+    await old.connect()
+    for uid in (1, 2, 99):
+        await old.touch_user(uid, f"user{uid}", f"User {uid}")
+    lid = await old.create_listing(1, "ru", draft())
+    await old.close()
+
+    r = Repo(path, 15)  # the settings now say 15%
+    await r.connect()
+    try:
+        assert (await r.get_listing(lid))["commission_percent"] == 10
+        await r.approve(lid, 99)
+        rid = await r.create_request(lid, 2, "Бобур", "+998930000002")
+        await r.reserve(rid, 99)
+        await r.set_final_price(lid, 99, 2_000_000)
+        deal, _ = await r.close_deal(lid, 99)
+        assert (deal["commission_percent"], deal["commission_amount"]) == (10, 200_000)
+        # A new listing, or one the seller edits and accepts again, goes at today's rate.
+        new = await r.create_listing(1, "ru", draft())
+        assert (await r.get_listing(new))["commission_percent"] == 15
+    finally:
+        await r.close()
+
+
+async def test_old_listings_get_the_rate_they_were_accepted_at(tmp_path):
+    import aiosqlite
+
+    from two_fit.repo import SCHEMA
+    path = tmp_path / "old.db"
+    old_schema = "\n".join(l for l in SCHEMA.splitlines() if "commission_percent        INTEGER," not in l)
+    async with aiosqlite.connect(path) as db:
+        await db.executescript(old_schema)
+        ts = "2026-01-01T00:00:00+00:00"
+        await db.execute("INSERT INTO users(id, created_at, updated_at) VALUES (1, ?, ?)", (ts, ts))
+        for kind in ("membership", "promo"):
+            await db.execute(
+                """INSERT INTO listings(seller_id, lang, kind, city, tariff, end_date, price, seller_name, seller_phone,
+                       commission_accepted_price, status, created_at, updated_at)
+                   VALUES (1, 'ru', ?, 'tashkent', '', ?, 100000, 'A', '', 100000, 'approved', ?, ?)""",
+                (kind, FUTURE, ts, ts))
+        await db.commit()
+    r = Repo(path, 15, 30)
+    await r.connect()
+    try:
+        rows = await r._all("SELECT kind, commission_percent FROM listings ORDER BY id")
+        assert [(x["kind"], x["commission_percent"]) for x in rows] == [("membership", 10), ("promo", 30)]
+    finally:
+        await r.close()
+
+
+def test_default_membership_rate_is_15(monkeypatch):
+    from two_fit.config import load_config
+    monkeypatch.delenv("COMMISSION_PERCENT", raising=False)
+    monkeypatch.setattr("two_fit.config.load_dotenv", lambda *a, **k: None)
+    assert load_config().commission_percent == 15
