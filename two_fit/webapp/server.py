@@ -32,6 +32,7 @@ from ..validators import (
     MAX_YEARS_AHEAD,
     MAX_YEARS_BACK,
     NAME_MAX,
+    PAYMENTS_LEFT_MAX,
     PRICE_MAX,
     PRICE_MIN,
     TARIFF_MAX,
@@ -39,6 +40,8 @@ from ..validators import (
     normalize_phone,
     parse_description,
     parse_end_date,
+    parse_monthly,
+    parse_payments_left,
     parse_start_date,
     parse_name,
     parse_price,
@@ -71,6 +74,10 @@ def public_view(listing: dict[str, Any]) -> dict[str, Any]:
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["usage"] = usage(listing["start_date"], listing["end_date"], today_local())
+    paid = listing["paid_in_full"]
+    view["paid_in_full"] = None if paid is None else bool(paid)  # None: listed before the question existed
+    view["monthly_payment"] = listing["monthly_payment"] if paid == 0 else None
+    view["payments_left"] = listing["payments_left"] if paid == 0 else None
     return view
 
 
@@ -205,6 +212,7 @@ class WebApp:
                 "tariff_max": TARIFF_MAX, "name_max": NAME_MAX,
                 "date_min": today.isoformat(), "date_max": f"{today.year + MAX_YEARS_AHEAD}-12-31",
                 "start_min": f"{today.year - MAX_YEARS_BACK}-01-01", "start_max": today.isoformat(),
+                "payments_left_max": PAYMENTS_LEFT_MAX,
             },
         }
 
@@ -298,9 +306,11 @@ class WebApp:
         city = body.get("city")
         if city not in CITIES:
             raise ApiError(400, "bad_city", ctx.t("app.err.city"), "city")
-        raw_price = body.get("price")
-        if isinstance(raw_price, int) and not isinstance(raw_price, bool):
-            raw_price = str(raw_price)
+        def number(key: str) -> Any:  # the form may send 2000000 or "2 000 000"
+            value = body.get(key)
+            return str(value) if isinstance(value, int) and not isinstance(value, bool) else value
+
+        raw_price = number("price")
         draft = {
             "city": city,
             "tariff": self._field(ctx, "tariff", parse_tariff, body.get("tariff")),
@@ -313,6 +323,13 @@ class WebApp:
         }
         draft["start_date"] = self._field(ctx, "start_date", self._iso_start, body.get("start_date") or "",
                                           today_local(), draft["end_date"])
+        paid = body.get("paid_in_full")
+        if not isinstance(paid, bool):
+            raise ApiError(400, "bad_payment", ctx.t("app.err.payment"), "payment")
+        draft["paid_in_full"] = paid
+        if not paid:
+            draft["monthly_payment"] = self._field(ctx, "monthly_payment", parse_monthly, number("monthly_payment"))
+            draft["payments_left"] = self._field(ctx, "payments_left", parse_payments_left, number("payments_left"))
         # The seller ticks the consent for one exact price; a different price means no consent.
         if body.get("accepted_price") != draft["price"]:
             raise ApiError(400, "commission_not_accepted", ctx.t("app.err.accept"), "accept")

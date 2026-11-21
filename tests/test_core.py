@@ -6,8 +6,8 @@ import pytest
 from two_fit.money import calc_commission, fmt_money
 from two_fit.repo import LS, RS, Repo, RepoError, today_local
 from two_fit.validators import (
-    ValidationError, contains_contacts, normalize_phone, parse_description, parse_end_date, parse_price,
-    parse_start_date,
+    ValidationError, contains_contacts, normalize_phone, parse_description, parse_end_date, parse_monthly,
+    parse_payments_left, parse_price, parse_start_date,
 )
 from two_fit.usage import usage
 
@@ -19,6 +19,7 @@ def draft(price=2_000_000, **kw):
         "city": "tashkent", "tariff": "Годовой", "end_date": FUTURE, "price": price,
         "description": "Осталось 7 месяцев", "screenshot_file_id": "file-1",
         "seller_name": "Алишер", "seller_phone": "+998901112233", "commission_accepted_price": price,
+        "paid_in_full": True,
     }
     d.update(kw)
     return d
@@ -314,7 +315,7 @@ async def test_old_database_gets_new_columns(tmp_path):
 
     from two_fit.repo import SCHEMA
     path = tmp_path / "old.db"
-    old_schema = "\n".join(l for l in SCHEMA.splitlines() if "price_negotiable" not in l and "start_date" not in l)
+    old_schema = "\n".join(l for l in SCHEMA.splitlines() if not any(c in l for c in ("price_negotiable", "start_date", "paid_in_full", "monthly_payment", "payments_left")))
     async with aiosqlite.connect(path) as db:  # a database from before the column existed
         await db.executescript(old_schema)
     r = Repo(path, 10)
@@ -329,3 +330,28 @@ async def test_old_database_gets_new_columns(tmp_path):
         await r.connect()  # running the migration twice is harmless
     finally:
         await r.close()
+
+
+def test_installment_parsing():
+    assert parse_monthly("500 000") == 500_000
+    assert parse_payments_left("9") == 9 and parse_payments_left("9 месяцев") == 9
+    for bad in ("0", "61", "", "девять", "1-2"):
+        with pytest.raises(ValidationError) as e:
+            parse_payments_left(bad)
+        assert e.value.code == "bad_payments_left"
+    with pytest.raises(ValidationError) as e:
+        parse_monthly("100")
+    assert e.value.code == "bad_monthly"
+
+
+async def test_payment_kind_is_required(repo):
+    with pytest.raises(RepoError):
+        await repo.create_listing(1, "ru", draft(paid_in_full=None))
+    with pytest.raises(RepoError):
+        await repo.create_listing(1, "ru", draft(paid_in_full=False, monthly_payment=500_000))
+    lid = await repo.create_listing(1, "ru", draft(paid_in_full=False, monthly_payment=500_000, payments_left=9))
+    listing = await repo.get_listing(lid)
+    assert (listing["paid_in_full"], listing["monthly_payment"], listing["payments_left"]) == (0, 500_000, 9)
+    lid = await repo.create_listing(1, "ru", draft(monthly_payment=500_000, payments_left=9))  # fully paid
+    listing = await repo.get_listing(lid)
+    assert (listing["paid_in_full"], listing["monthly_payment"], listing["payments_left"]) == (1, None, None)

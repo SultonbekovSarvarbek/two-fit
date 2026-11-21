@@ -60,7 +60,7 @@ async def api(h):
 def draft(**over):
     body = {"city": "tashkent", "tariff": "Безлимит 12 месяцев", "end_date": END, "price": "2 000 000",
             "description": "Осталось 7 месяцев", "name": "Алишер", "phone": "+998 90 111 22 33",
-            "accepted_price": 2_000_000, "screenshot": None}
+            "accepted_price": 2_000_000, "screenshot": None, "paid_in_full": True}
     body.update(over)
     return body
 
@@ -200,7 +200,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     assert {c["code"]: c["count"] for c in cat["cities"]} == {"tashkent": 1, "samarkand": 1}
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
-                             "description"}
+                             "description", "paid_in_full", "monthly_payment", "payments_left"}
         assert item["start_date"] is None and item["usage"] is None
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]
@@ -336,3 +336,31 @@ async def test_start_date_shows_usage(h, api):
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
     assert boot["limits"]["start_max"] == today_local().isoformat()
     assert {"app.usage", "app.usage_left", "app.unit.m", "app.unit.d", "app.f.start"} <= set(boot["texts"])
+
+
+async def test_installment_is_asked_and_shown(h, api):
+    status, data = await api.call("POST", "/api/listings", SELLER, draft(paid_in_full=None))
+    assert status == 400 and data["field"] == "payment"
+    status, data = await api.call("POST", "/api/listings", SELLER, draft(paid_in_full=False, payments_left=9))
+    assert status == 400 and data["field"] == "monthly_payment"
+    status, data = await api.call("POST", "/api/listings", SELLER,
+                                  draft(paid_in_full=False, monthly_payment="500 000", payments_left=61))
+    assert status == 400 and data["field"] == "payments_left"
+
+    full = await publish(h, api)
+    inst = await publish(h, api, paid_in_full=False, monthly_payment=500_000, payments_left="9")
+    _, card = await api.call("GET", f"/api/listings/{inst}", BUYER)
+    l = card["listing"]
+    assert (l["paid_in_full"], l["monthly_payment"], l["payments_left"]) == (False, 500_000, 9)
+    _, card = await api.call("GET", f"/api/listings/{full}", BUYER)
+    l = card["listing"]
+    assert (l["paid_in_full"], l["monthly_payment"], l["payments_left"]) == (True, None, None)
+
+    # Switching to «fully paid» drops the installment numbers.
+    status, _ = await api.call("PUT", f"/api/listings/{inst}", SELLER,
+                               draft(paid_in_full=True, monthly_payment=500_000, payments_left=9))
+    assert status == 200
+    stored = await h.repo.get_listing(inst)
+    assert (stored["paid_in_full"], stored["monthly_payment"], stored["payments_left"]) == (1, None, None)
+    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+    assert {"app.pay.full", "app.pay.installment", "app.pay.installment_note", "app.err.payment"} <= set(boot["texts"])

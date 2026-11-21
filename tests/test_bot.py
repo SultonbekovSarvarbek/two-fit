@@ -32,6 +32,7 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     await h.send(uid, "Йиллик безлимит")
     await h.send(uid, END)
     await h.send(uid, START)
+    await h.click(uid, "sl:pay:full")
     calc = await h.send(uid, price)
     assert "200 000" in texts(calc) and "1 800 000" in texts(calc)
     await h.send(uid, "Қолган 7 ой, зал яқин")
@@ -166,7 +167,7 @@ async def test_wizard_navigation_and_validation(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:city:samarkand")
-    assert "Шаг 1/8" in texts(await h.click(SELLER, "sl:back:"))  # back to city
+    assert "Шаг 1/9" in texts(await h.click(SELLER, "sl:back:"))  # back to city
     await h.click(SELLER, "sl:city:samarkand")
     assert "от 2 до 60" in texts(await h.send(SELLER, "x"))
     await h.send(SELLER, "Годовой")
@@ -175,6 +176,7 @@ async def test_wizard_navigation_and_validation(h):
     tomorrow = (today_local() + timedelta(days=1)).strftime("%d.%m.%Y")
     assert "ещё не наступила" in texts(await h.send(SELLER, tomorrow))
     await h.click(SELLER, "sl:skip:")  # the start date is optional
+    await h.click(SELLER, "sl:pay:full")
     assert "цифрами" in texts(await h.send(SELLER, "дорого"))
     await h.send(SELLER, "3000000")
     assert "контакты" in texts(await h.send(SELLER, "пишите @alisher_fit"))
@@ -259,7 +261,7 @@ async def test_restart_keeps_language_data_and_wizard(tmp_path):
 
     h2 = await Harness(db).start()  # "restart"
     nxt = await h2.send(SELLER, END)  # wizard continues at the start-date step, in Uzbek
-    assert "4/8-қадам" in texts(nxt)
+    assert "4/9-қадам" in texts(nxt)
     welcome = await h2.send(SELLER, "/start")
     assert "Тилни танланг" not in texts(welcome) and "Эълон жойлаш — бепул" in texts(welcome)
     await h2.stop()
@@ -269,3 +271,46 @@ async def test_bot_ignores_group_chats(h):
     upd = {"message": {"message_id": 5, "date": 0, "chat": {"id": -100, "type": "supergroup"},
                        "from": h._user(SELLER), "text": "/start"}}
     assert await h._feed(upd) == []
+
+
+async def test_installment_wizard_and_card(h):
+    await choose_lang(h, SELLER, "ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:city:tashkent")
+    await h.send(SELLER, "Безлимит 12 месяцев")
+    await h.send(SELLER, END)
+    assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:skip:"))
+    assert "Выберите действие" in texts(await h.send(SELLER, "500000"))  # a button is expected here
+    assert "в месяц" in texts(await h.click(SELLER, "sl:pay:installment"))
+    assert "цифрами" in texts(await h.send(SELLER, "много"))
+    assert "платежей" in texts(await h.send(SELLER, "500 000"))
+    assert "от 1 до 60" in texts(await h.send(SELLER, "100"))
+    ask_price = texts(await h.send(SELLER, "9"))
+    assert "заплатит вам сейчас" in ask_price and "500\xa0000 сум × 9" in ask_price
+    # Back from the price goes to the payments left, not straight to the payment kind
+    assert "платежей" in texts(await h.click(SELLER, "sl:back:"))
+    await h.send(SELLER, "9")
+    await h.send(SELLER, "300 000")
+    await h.click(SELLER, "sl:skip:")
+    await h.click(SELLER, "sl:skip:")
+    await h.send(SELLER, "Алишер")
+    preview = texts(await h.send(SELLER, contact="+998901112233"))
+    assert ("💳 <b>Рассрочка:</b> дальше покупатель сам платит 500\xa0000 сум/мес × 9 (всего ещё 4\xa0500\xa0000 сум)"
+            in preview)
+    await h.click(SELLER, "sl:accept:")
+    await h.click(SELLER, "sl:send:")
+    listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
+    assert (listing["paid_in_full"], listing["monthly_payment"], listing["payments_left"]) == (0, 500_000, 9)
+    assert listing["price"] == 300_000
+
+
+async def test_fully_paid_skips_installment_questions(h):
+    await choose_lang(h, SELLER, "ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:city:tashkent")
+    await h.send(SELLER, "Годовой")
+    await h.send(SELLER, END)
+    await h.click(SELLER, "sl:skip:")
+    ask_price = texts(await h.click(SELLER, "sl:pay:full"))
+    assert "Шаг 6/9" in ask_price and "больше он ничего не доплачивает" in ask_price
+    assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:back:"))  # back skips the installment steps

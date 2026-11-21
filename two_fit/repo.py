@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS listings (
     start_date                TEXT,               -- YYYY-MM-DD, optional: when the membership was activated
     price                     INTEGER NOT NULL CHECK (price > 0),
     price_negotiable          INTEGER NOT NULL DEFAULT 0,  -- 1: price is open to negotiation
+    paid_in_full              INTEGER,            -- 1: fully paid, 0: installment, NULL: not asked (old listings)
+    monthly_payment           INTEGER,            -- installment: what the buyer keeps paying every month
+    payments_left             INTEGER,            -- installment: how many of those payments are left
     description               TEXT NOT NULL DEFAULT '',
     screenshot_file_id        TEXT,
     seller_name               TEXT NOT NULL,
@@ -189,6 +192,9 @@ class Repo:
             await self.db.execute("ALTER TABLE listings ADD COLUMN price_negotiable INTEGER NOT NULL DEFAULT 0")
         if "start_date" not in columns:
             await self.db.execute("ALTER TABLE listings ADD COLUMN start_date TEXT")
+        for column in ("paid_in_full", "monthly_payment", "payments_left"):
+            if column not in columns:
+                await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} INTEGER")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -286,6 +292,18 @@ class Repo:
             raise RepoError("commission_not_accepted")
         if draft.get("start_date") and draft["start_date"] >= draft["end_date"]:
             raise RepoError("bad_start")
+        # Fully paid or installment must be stated: «9 months, 500 000» meant 500 000 every month.
+        paid = draft.get("paid_in_full")
+        if paid not in (True, False, 0, 1):
+            raise RepoError("incomplete")
+        if not paid and not (draft.get("monthly_payment") and draft.get("payments_left")):
+            raise RepoError("incomplete")
+
+    @staticmethod
+    def _payment(draft: dict[str, Any]) -> tuple[int, int | None, int | None]:
+        if draft["paid_in_full"]:
+            return 1, None, None
+        return 0, draft["monthly_payment"], draft["payments_left"]
 
     async def create_listing(self, seller_id: int, lang: str, draft: dict[str, Any]) -> int:
         self._check_draft(draft)
@@ -293,13 +311,14 @@ class Repo:
             ts = now_iso()
             cur = await self.db.execute(
                 """INSERT INTO listings(seller_id, lang, city, tariff, end_date, start_date, price, price_negotiable,
+                       paid_in_full, monthly_payment, payments_left,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
                        status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], draft["tariff"], draft["end_date"], draft.get("start_date"),
                     draft["price"],
-                    int(bool(draft.get("price_negotiable"))),
+                    int(bool(draft.get("price_negotiable"))), *self._payment(draft),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, ts, ts,
                 ),
@@ -317,13 +336,15 @@ class Repo:
             if listing["status"] not in LS.SELLER_EDITABLE:
                 raise RepoError("bad_status")
             await self.db.execute(
-                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, start_date=?, price=?, price_negotiable=?, description=?,
+                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, start_date=?, price=?, price_negotiable=?,
+                       paid_in_full=?, monthly_payment=?, payments_left=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?,
                        status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
                    WHERE id=?""",
                 (
                     lang, draft["city"], draft["tariff"], draft["end_date"], draft.get("start_date"), draft["price"],
-                    int(bool(draft.get("price_negotiable"))), draft.get("description") or "", draft.get("screenshot_file_id"),
+                    int(bool(draft.get("price_negotiable"))), *self._payment(draft),
+                    draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, now_iso(), listing_id,
                 ),
             )

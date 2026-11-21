@@ -6,6 +6,7 @@ from datetime import date
 
 PRICE_MIN = 10_000
 PRICE_MAX = 100_000_000
+PAYMENTS_LEFT_MAX = 60  # monthly installment payments still to make
 DESC_MAX = 500
 TARIFF_MIN, TARIFF_MAX = 2, 60
 NAME_MIN, NAME_MAX = 2, 60
@@ -85,6 +86,22 @@ def parse_price(text: str | None) -> int:
     if not PRICE_MIN <= value <= PRICE_MAX:
         raise ValidationError("bad_price")
     return value
+
+
+def parse_monthly(text: str | None) -> int:
+    """Installment: how much the seller pays 1Fit every month; the buyer takes these payments over."""
+    try:
+        return parse_price(text)
+    except ValidationError:
+        raise ValidationError("bad_monthly") from None
+
+
+def parse_payments_left(text: str | None) -> int:
+    """Installment: how many monthly payments are still due, «9» or «9 месяцев»."""
+    m = re.fullmatch(r"\s*(\d{1,3})\s*[^\d]*", text or "")
+    if not m or not 1 <= int(m.group(1)) <= PAYMENTS_LEFT_MAX:
+        raise ValidationError("bad_payments_left")
+    return int(m.group(1))
 
 
 def normalize_phone(text: str | None) -> str:

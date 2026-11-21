@@ -149,9 +149,23 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
     )
     if data.get("price_negotiable"):
         text += ctx.t("card.negotiable")
+    text += payment_line(ctx, data)
     if data.get("description"):
         text += ctx.t("card.desc", desc=esc(data["description"]))
     return text
+
+
+def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:
+    """Fully paid or installment, so «500 000» is never mistaken for the whole price. Empty for old listings."""
+    paid = data.get("paid_in_full")
+    if paid is None:
+        return ""
+    if paid:
+        return ctx.t("card.paid_full")
+    monthly, left = data.get("monthly_payment"), data.get("payments_left")
+    if not (monthly and left):
+        return ""
+    return ctx.t("card.installment", monthly=fmt_money(monthly), left=left, total=fmt_money(monthly * left))
 
 
 def commission_block(ctx: Ctx, price: int) -> str:
