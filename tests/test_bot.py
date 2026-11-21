@@ -357,3 +357,21 @@ async def test_promo_code_wizard(h):
     await h.click(SELLER, "sl:send:")
     listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
     assert (listing["kind"], listing["promo_code"], listing["price"]) == ("promo", "FIT-2026", 100_000)
+
+
+async def test_preview_says_what_the_seller_gives(h):
+    await choose_lang(h, SELLER, "ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:city:tashkent")
+    await h.click(SELLER, "sl:plan:365")
+    await h.send(SELLER, END)
+    await h.click(SELLER, "sl:skip:")
+    await h.click(SELLER, "sl:pay:full")
+    await h.click(SELLER, "sl:freeze:no")
+    await h.send(SELLER, "2 000 000")
+    await h.click(SELLER, "sl:skip:")
+    await h.click(SELLER, "sl:skip:")
+    await h.send(SELLER, "Алишер")
+    preview = texts(await h.send(SELLER, contact="+998901112233"))
+    assert "📦 Вы отдаёте покупателю <b>7 мес.</b> — до" in preview and "Всё верно?" in preview

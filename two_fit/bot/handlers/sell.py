@@ -272,6 +272,9 @@ def preview_text(ctx: Ctx, data: dict) -> str:
     ]
     if data.get("auto_price") and _kind(data) == LK.MEMBERSHIP:
         parts.insert(3, ctx.t("sell.price_auto"))  # right under the card: where the price comes from
+    if _kind(data) == LK.MEMBERSHIP and d.get("end_date"):
+        # «You give the buyer 52 days — until 13 January 2027»: what the price is for, in plain words
+        parts.insert(2, ctx.t("sell.giving", left=left_text(ctx, d["end_date"]), date=fmt_day(ctx, d["end_date"])))
     return "\n\n".join(parts)
 
 

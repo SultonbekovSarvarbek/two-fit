@@ -177,6 +177,7 @@ p { margin: 0; }
 .advice .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 4px; padding: 0; }
 .advice .label { font-size: 13px; color: var(--hint); }
 .advice .value { font-size: 20px; font-weight: 700; }
+.advice p.giving { opacity: 1; font-weight: 600; }
 .advice p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--text); opacity: 0.78; }
 /* The per-month comparison is the point of the card, so it gets the main text colour, not the faint hint:
    on the lime price card the hint grey of the dark theme all but vanished. */
@@ -256,6 +257,11 @@ p { margin: 0; }
   border-top-color: var(--lime); }
 .overlay .title { font-size: 17px; font-weight: 700; }
 .overlay .sub { font-size: 14px; opacity: 0.8; max-width: 280px; }
+.overlay.sheet { justify-content: flex-end; padding: 0; }
+.sheet-card { width: 100%; max-width: 560px; max-height: 92vh; overflow: auto; text-align: left; padding: 20px 16px calc(16px + var(--safe-b));
+  border-radius: 22px 22px 0 0; background: var(--card); color: var(--text); display: grid; gap: 10px; }
+.sheet-card .title { font: 700 19px/1.25 var(--display); margin: 2px 4px 4px; }
+.sheet-card .rows { background: var(--page); border-radius: 16px; }
 /* skeleton placeholders while data loads */
 .sk {
   --sk-base: var(--line); --sk-glow: color-mix(in srgb, var(--card) 70%, transparent);
@@ -488,6 +494,25 @@ const installment = (l) => l.paid_in_full === false && l.monthly_payment && l.pa
 const installmentVars = (l) => ({ monthly: money(l.monthly_payment), left: l.payments_left, total: money(l.monthly_payment * l.payments_left) });
 const isPromo = (l) => l.kind === "promo";
 // Months left instead of a tariff name: «12 months» made buyers think they got all 12.
+// «52 дн.» / «7 мес.» from today to an end date — the same rule as the server's remaining().
+function leftFor(endIso) {
+  const days = Math.max(0, Math.round((new Date(endIso) - new Date(new Date().toISOString().slice(0, 10))) / 864e5));
+  return days >= 60 ? Math.max(1, Math.round(days / 30.4375)) + " " + T("app.unit.m") : days + " " + T("app.unit.d");
+}
+// «Проверьте объявление»: the seller confirms the summary before it goes to moderation.
+function confirmSheet(title, rows, okText, backText) {
+  return new Promise((resolve) => {
+    const done = (ok) => { box.remove(); resolve(ok); };
+    const box = h("div", { class: "overlay sheet", role: "dialog", "aria-modal": "true" },
+      h("div", { class: "sheet-card" },
+        h("div", { class: "title" }, title),
+        h("div", { class: "rows" }, rows.filter(Boolean).map(([k, v, strong]) =>
+          h("div", { class: strong ? "strong" : null }, h("span", { class: "k" }, k), h("span", { class: "v num" }, v)))),
+        h("button", { class: "btn", type: "button", onclick: () => done(true) }, okText),
+        h("button", { class: "btn ghost", type: "button", onclick: () => done(false) }, backText)));
+    document.body.append(box);
+  });
+}
 const leftText = (l, key) => T(key || "app.left", { n: l.left.n, unit: T("app.unit." + l.left.unit) });
 const promoBadge = (l) => isPromo(l) ? [h("span", { class: "badge ptype inst" }, "🎁 " + T("app.badge.promo")), " "] : null;
 const payBadge = (l) => installment(l) ? h("span", { class: "badge ptype inst" }, T("app.pay.installment_row", installmentVars(l))) : null;
@@ -775,6 +800,7 @@ function sellForm(d, onDone, onKind) {
     adviceCard.replaceChildren(...[
       h("div", { class: "label" }, "💰 " + T("app.sell.price_auto")),
       h("div", { class: "row" }, h("div", { class: "value num" }, money(advice.recommended) + " " + T("app.sum"))),
+      d.end_date ? h("p", { class: "giving" }, T("app.sell.giving", { left: leftFor(d.end_date), date: dmy(d.end_date) })) : null,
       h("p", null, T("app.sell.price_auto_hint")),
       advice.max ? h("p", null, T("app.advice.text", { month: money(advice.month), fit_month: money(advice.fit_month), saving: advice.saving }))
         : h("p", null, T("app.advice.heavy", { total: money(advice.installments) })),
@@ -926,6 +952,22 @@ function sellForm(d, onDone, onKind) {
     drawPay(); drawCalc(); loadAdvice();
     if (onKind) onKind(d.kind);
   };
+  // What the seller confirms: what is given away, for how much, and what they keep.
+  const summaryRows = () => {
+    const p = Number(d.price), f = fee(p, d.kind), membership = d.kind === "membership";
+    return [
+      membership ? [T("app.f.plan"), T("app.plan.short." + d.plan)] : [T("app.f.what_promo"), d.tariff],
+      d.end_date ? [membership ? T("app.confirm.giving") : T("app.f.date_promo"),
+        membership ? T("app.confirm.giving_v", { left: leftFor(d.end_date), date: dmy(d.end_date) }) : dmy(d.end_date)] : null,
+      membership ? ["❄️ " + T("app.f.freeze_short"), d.freeze ? T("app.freeze_row", { days: d.freezeDays }) : T("app.confirm.none")] : null,
+      membership ? [T("app.f.pay_short"), d.paid === false
+        ? T("app.pay.installment_row", { monthly: money(d.monthly), left: d.left }) : T("app.pay.full_row")] : null,
+      [T("app.c.price"), money(p) + " " + T("app.sum") + (d.negotiable ? " · " + T("app.negotiable") : "")],
+      [T("app.c.fee", { percent: pct(d.kind) }), "− " + money(f) + " " + T("app.sum")],
+      [T("app.c.net"), money(p - f) + " " + T("app.sum"), true],
+      ["🔒 " + T("app.confirm.shots"), String(shotCount())],
+    ];
+  };
   const submit = h("button", { class: "btn", type: "submit" }, T("app.sell.submit"));
   const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
     e.preventDefault();
@@ -936,6 +978,7 @@ function sellForm(d, onDone, onKind) {
     if (d.kind === "membership" && d.freeze && !Number(d.freezeDays)) { showFieldError(fields, { field: "freeze_days", message: T("app.err.freeze_days") }); return; }
     if (B.vars.shot_required && !shotCount()) { shotRow.classList.add("invalid"); showFieldError(fields, { field: "screenshot", message: T("app.err.shot_required") }); return; }
     if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
+    if (!(await confirmSheet(T("app.confirm.title"), summaryRows(), T("app.confirm.ok"), T("app.confirm.back")))) return;
     submit.disabled = true;
     const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null,
                    freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
