@@ -53,3 +53,8 @@ class AdmCb(CallbackData, prefix="ad"):
     id: int = 0
     page: int = 0
     extra: str = ""
+
+
+class FitPriceCb(CallbackData, prefix="fp"):
+    action: str  # show | check | apply | ignore
+    tok: str = ""

@@ -1,6 +1,7 @@
 """Builds the dispatcher. Kept separate from __main__ so tests can drive it without a real token."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
@@ -17,6 +18,7 @@ from aiogram.types import (
 
 from .config import Config, load_config
 from .i18n import I18n
+from .price_watch import PriceWatcher
 from .repo import Repo
 from .storage import SQLiteStorage
 from .bot.handlers import build_router
@@ -33,6 +35,7 @@ def create_dispatcher(repo: Repo, i18n: I18n, cfg: Config, bot: Bot) -> Dispatch
     dp.message.outer_middleware(mw)
     dp.callback_query.outer_middleware(mw)
     dp["notifier"] = Notifier(bot)
+    dp["price_watcher"] = PriceWatcher(repo, i18n, cfg, dp["notifier"])
     dp.include_router(build_router())
     return dp
 
@@ -50,7 +53,8 @@ async def setup_bot_profile(bot: Bot, i18n: I18n, cfg: Config) -> None:
             await bot.set_my_commands(commands, scope=BotCommandScopeDefault(), language_code=lang_code)
         for admin_id in cfg.admin_ids:
             await bot.set_my_commands(
-                [BotCommand(command="admin", description="Admin"), BotCommand(command="start", description="Menu")],
+                [BotCommand(command="admin", description="Admin"), BotCommand(command="prices", description="1Fit prices"),
+                 BotCommand(command="start", description="Menu")],
                 scope=BotCommandScopeChat(chat_id=admin_id),
             )
         # The button next to the message field opens the Mini App (or goes back to the default one).
@@ -84,10 +88,15 @@ async def run() -> None:
         web_runner = await start_webapp(repo, i18n, cfg, bot, dp["notifier"])
     elif cfg.webapp_url:
         log.warning("WEBAPP_URL must start with https:// — the Mini App is off")
+    watch_task = None
+    if cfg.fit_watch:
+        watch_task = asyncio.create_task(dp["price_watcher"].run())
     try:
         log.info("Two Fit bot started")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if watch_task is not None:
+            watch_task.cancel()
         if web_runner is not None:
             await web_runner.cleanup()
         await repo.close()

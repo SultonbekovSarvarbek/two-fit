@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from ...money import fmt_money
 from ...repo import CS, LS, RS, RepoError
 from ...validators import ValidationError, clean_text, parse_price
-from ..callbacks import AdmCb, PriceCb
+from ..callbacks import AdmCb, FitPriceCb, PriceCb
 from ..context import Ctx
 from ..middlewares import IsAdmin
 from ..notify import Notifier
@@ -45,6 +45,7 @@ async def render_home(ctx: Ctx) -> tuple[str, InlineKeyboardMarkup]:
         [btn(ctx.t("admin.btn.requests", n=active_req), A("areqs"))],
         [btn(ctx.t("admin.btn.deals"), A("deals"))],
         [btn(ctx.t("admin.btn.stats"), A("stats")), btn(ctx.t("admin.btn.find"), A("find"))],
+        [btn(ctx.t("admin.btn.prices"), FitPriceCb(action="show"))],
     )
 
 

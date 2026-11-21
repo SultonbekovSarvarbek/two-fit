@@ -24,6 +24,10 @@ class Config:
     webapp_host: str = "127.0.0.1"
     webapp_port: int = 8080
     promo_commission_percent: int = 30  # for a promo code
+    # 1Fit price watcher: reads 1Fit's Tashkent prices and tells the admins when they change.
+    fit_watch: bool = True
+    fit_api_url: str = "https://api-uz.1fit.app/api/landing/v2/subscriptions/?city_id=1"
+    fit_watch_times: str = "08:00,11:00,14:00,17:00,20:00"  # Tashkent time
 
     @property
     def webapp_enabled(self) -> bool:
@@ -65,4 +69,7 @@ def load_config() -> Config:
         webapp_host=os.getenv("WEBAPP_HOST", "127.0.0.1").strip() or "127.0.0.1",
         webapp_port=int(os.getenv("WEBAPP_PORT", "8080")),
         promo_commission_percent=int(os.getenv("PROMO_COMMISSION_PERCENT", "30")),
+        fit_watch=os.getenv("FIT_WATCH", "1").strip().lower() not in ("0", "false", "no", "off", ""),
+        fit_api_url=os.getenv("FIT_API_URL", "").strip() or Config.fit_api_url,
+        fit_watch_times=os.getenv("FIT_WATCH_TIMES", "").strip() or Config.fit_watch_times,
     )

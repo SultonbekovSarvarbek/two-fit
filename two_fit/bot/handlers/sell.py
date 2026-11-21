@@ -28,7 +28,7 @@ from ..callbacks import AdmCb, SellCb
 from ..context import Ctx
 from ..middlewares import Btn
 from ..notify import Notifier
-from ..ui import btn, commission_block, esc, kb, listing_public, main_menu, phone_kb
+from ..ui import advice_text, btn, commission_block, esc, kb, listing_public, main_menu, phone_kb, price_advice
 
 router = Router(name="sell")
 
@@ -152,7 +152,7 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
                 "sell.ask_price_installment", monthly=fmt_money(d["monthly_payment"]), left=d["payments_left"])
         else:
             text = prompt(ctx, data, step)
-        await message.answer(text, reply_markup=_nav(ctx, step))
+        await message.answer(text + _advice_part(ctx, d), reply_markup=_nav(ctx, step, _advice_rows(ctx, d)))
     elif step == "desc":
         skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
@@ -168,6 +168,19 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, extra))
     elif step == "phone":
         await message.answer(ctx.t("sell.ask_phone"), reply_markup=phone_kb(ctx))
+
+
+def _advice_part(ctx: Ctx, draft: dict) -> str:
+    a = price_advice(ctx, draft)
+    return "\n\n" + advice_text(ctx, a) if a else ""
+
+
+def _advice_rows(ctx: Ctx, draft: dict) -> list:
+    """One tap to take the recommended price."""
+    a = price_advice(ctx, draft)
+    if not a:
+        return []
+    return [[btn(ctx.t("advice.use_btn", price=fmt_money(a.recommended)), SellCb(action="advice", value=str(a.recommended)))]]
 
 
 async def advance(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
@@ -433,15 +446,41 @@ async def on_price(message: Message, state: FSMContext, ctx: Ctx) -> None:
     except ValidationError as e:
         await message.answer(ctx.t(f"err.{e.code}"), reply_markup=_nav(ctx, "price"))
         return
+    await _set_price(message, state, ctx, price)
+
+
+@router.callback_query(SellForm.price, SellCb.filter(F.action == "advice"))
+async def on_price_advice(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
+    """«✅ Set 4 530 000» under the price question: take the recommended price."""
+    a = price_advice(ctx, (await state.get_data()).get("draft") or {})
+    if not a or callback_data.value != str(a.recommended):
+        await call.answer(ctx.t("common.stale"), show_alert=True)
+        return
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await _set_price(call.message, state, ctx, a.recommended)
+
+
+async def _set_price(message: Message, state: FSMContext, ctx: Ctx, price: int) -> None:
     data = await state.get_data()
-    old = (data.get("draft") or {}).get("price")
+    draft = data.get("draft") or {}
+    a = price_advice(ctx, draft)
+    if a and a.too_high(price):
+        # Nobody buys it dearer than 1Fit sells a new one in installments.
+        await message.answer(ctx.t("err.price_too_high", max=fmt_money(a.max_price), price=fmt_money(a.recommended)),
+                             reply_markup=_nav(ctx, "price", _advice_rows(ctx, draft)))
+        return
+    old = draft.get("price")
     if price != old:
         # New price -> new commission -> the seller must confirm again.
         if data.get("accepted"):
             await message.answer(ctx.t("sell.accept_reset"))
         await state.update_data(accepted=False)
     await draft_update(state, price=price)
-    await message.answer(ctx.t("sell.price_calc", block=commission_block(ctx, price, _kind(data))))
+    text = ctx.t("sell.price_calc", block=commission_block(ctx, price, _kind(data)))
+    if a and a.too_low(price):
+        text += "\n\n" + ctx.t("advice.too_low", price=fmt_money(a.recommended))
+    await message.answer(text)
     await advance(message, state, ctx, "price")
 
 
@@ -584,6 +623,15 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
         await call.message.edit_reply_markup(reply_markup=None)
         await state.update_data(single=True)
         await ask(call.message, state, ctx, "payment")
+        return
+    a = price_advice(ctx, draft)
+    if a and a.too_high(draft["price"]):
+        # The end date or the installments changed after the price was set: the price is now above the limit.
+        await call.answer()
+        await call.message.edit_reply_markup(reply_markup=None)
+        await call.message.answer(ctx.t("err.price_too_high", max=fmt_money(a.max_price), price=fmt_money(a.recommended)))
+        await state.update_data(single=True)
+        await ask(call.message, state, ctx, "price")
         return
     draft["commission_accepted_price"] = draft.get("price")
     try:

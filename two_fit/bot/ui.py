@@ -16,6 +16,7 @@ from aiogram.types import (
 
 from ..i18n import LANGS
 from ..money import fmt_money
+from ..pricing import Advice, advise
 from ..repo import LS, TZ, Repo, today_local
 from ..usage import remaining, usage
 from .callbacks import NOOP, LangCb
@@ -157,10 +158,41 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
     )
     if data.get("price_negotiable"):
         text += ctx.t("card.negotiable")
+    text += month_line(ctx, data)
     text += payment_line(ctx, data)
     if data.get("description"):
         text += ctx.t("card.desc", desc=esc(data["description"]))
     return text
+
+
+def price_advice(ctx: Ctx, data: dict[str, Any]) -> Advice | None:
+    """Price advice for a membership listing or draft; None for a promo code or without an end date."""
+    if data.get("kind") == "promo" or not data.get("end_date"):
+        return None
+    installment = data.get("paid_in_full") is False
+    return advise(data["end_date"], today_local(), ctx.repo.fit_prices,
+                  data.get("monthly_payment") if installment else None,
+                  data.get("payments_left") if installment else None)
+
+
+def advice_text(ctx: Ctx, a: Advice) -> str:
+    """«Recommended price … ≈ … per month, 1Fit … per month» for the price step."""
+    if not a.max_price:  # the installments alone cost about as much as 1Fit
+        return ctx.t("advice.heavy", total=fmt_money(a.installments), price=fmt_money(a.recommended))
+    text = ctx.t("advice.block", price=fmt_money(a.recommended), month=fmt_money(a.month_cost(a.recommended)),
+                 fit_month=fmt_money(a.fit_month), saving=a.saving(a.recommended))
+    if a.installments:
+        text += ctx.t("advice.installment", total=fmt_money(a.installments))
+    return text + ctx.t("advice.max", max=fmt_money(a.max_price))
+
+
+def month_line(ctx: Ctx, data: dict[str, Any]) -> str:
+    """«≈ 459 000 сум/мес · у 1Fit 658 000 (−30%)» — the per-month cost the buyer compares with 1Fit."""
+    a = price_advice(ctx, data)
+    if not a or not data.get("price") or a.saving(data["price"]) <= 0:
+        return ""
+    return ctx.t("card.month", month=fmt_money(a.month_cost(data["price"])), fit_month=fmt_money(a.fit_month),
+                 saving=a.saving(data["price"]))
 
 
 def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:

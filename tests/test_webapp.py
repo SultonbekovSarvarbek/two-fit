@@ -112,7 +112,7 @@ async def test_bootstrap_language_and_switch(h, api):
 # ------------------------------------------------------------------ selling
 async def test_catalog_is_sorted_cheapest_first(h, api):
     mid = await publish(h, api, price="2 000 000", accepted_price=2_000_000)
-    high = await publish(h, api, price="5 000 000", accepted_price=5_000_000)
+    high = await publish(h, api, price="3 500 000", accepted_price=3_500_000)
     low = await publish(h, api, price="900 000", accepted_price=900_000)
     _, cat = await api.call("GET", "/api/catalog", BUYER)
     assert [x["id"] for x in cat["items"]] == [low, mid, high]
@@ -200,7 +200,8 @@ async def test_catalog_shows_only_public_fields(h, api):
     assert {c["code"]: c["count"] for c in cat["cities"]} == {"tashkent": 1, "samarkand": 1}
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
-                             "description", "paid_in_full", "monthly_payment", "payments_left", "kind", "left"}
+                             "description", "paid_in_full", "monthly_payment", "payments_left", "kind", "left",
+                             "month_cost"}
         assert item["start_date"] is None and item["usage"] is None
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]

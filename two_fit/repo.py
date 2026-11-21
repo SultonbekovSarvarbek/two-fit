@@ -14,6 +14,7 @@ from typing import Any
 import aiosqlite
 
 from .money import calc_commission
+from .pricing import normalize_prices
 
 # Uzbekistan has no DST: UTC+5 all year round.
 TZ = timezone(timedelta(hours=5))
@@ -168,6 +169,21 @@ CREATE TABLE IF NOT EXISTS fsm (
     state TEXT,
     data  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fit_price_checks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    checked_at TEXT NOT NULL,
+    status     TEXT NOT NULL,          -- ok | changed | error
+    prices     TEXT,                   -- {"365": 7890000, ...} as read from 1Fit
+    full       TEXT,                   -- prices without 1Fit's discount
+    error      TEXT
+);
 """
 
 
@@ -181,6 +197,8 @@ class Repo:
         self.commission_percent = commission_percent
         self.promo_commission_percent = promo_commission_percent
         self._db: aiosqlite.Connection | None = None
+        # 1Fit prices used for the price advice; read from the database on connect, updated by the price watcher.
+        self.fit_prices: dict[int, int] = normalize_prices(None)
         # One connection shared by all handlers: the lock keeps transactions from interleaving.
         self._lock = asyncio.Lock()
 
@@ -193,6 +211,7 @@ class Repo:
         await self._db.execute("PRAGMA journal_mode = WAL")
         await self._db.executescript(SCHEMA)
         await self._migrate()
+        self.fit_prices = normalize_prices(await self.get_setting("fit_prices"))
 
     async def _migrate(self) -> None:
         """Columns added after the first release: CREATE TABLE IF NOT EXISTS does not add them."""
@@ -781,3 +800,43 @@ class Repo:
                 "INSERT INTO fsm(key, state, data) VALUES (?,NULL,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
                 (key, json.dumps(data, ensure_ascii=False)),
             )
+
+    # -------------------------------------------------------------------- settings
+    async def get_setting(self, key: str) -> Any:
+        row = await self._one("SELECT value FROM settings WHERE key=?", (key,))
+        return json.loads(row["value"]) if row else None
+
+    async def set_setting(self, key: str, value: Any) -> None:
+        async with self.tx():
+            await self.db.execute(
+                "INSERT INTO settings(key, value, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (key, json.dumps(value, ensure_ascii=False), now_iso()),
+            )
+
+    async def set_fit_prices(self, prices: dict[int, int], admin_id: int | None = None) -> None:
+        clean = normalize_prices(prices)
+        async with self.tx():
+            await self.db.execute(
+                "INSERT INTO settings(key, value, updated_at) VALUES ('fit_prices',?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (json.dumps({str(k): v for k, v in clean.items()}), now_iso()),
+            )
+            await self._log(None, admin_id, "fit_prices", prices={str(k): v for k, v in clean.items()})
+        self.fit_prices = clean
+
+    async def log_price_check(self, status: str, prices: dict[int, int] | None = None,
+                              full: dict[int, int] | None = None, error: str | None = None) -> None:
+        dump = lambda d: json.dumps({str(k): v for k, v in d.items()}) if d else None  # noqa: E731
+        async with self.tx():
+            await self.db.execute(
+                "INSERT INTO fit_price_checks(checked_at, status, prices, full, error) VALUES (?,?,?,?,?)",
+                (now_iso(), status, dump(prices), dump(full), error),
+            )
+
+    async def last_price_checks(self, limit: int = 5) -> list[dict[str, Any]]:
+        rows = await self._all("SELECT * FROM fit_price_checks ORDER BY id DESC LIMIT ?", (limit,))
+        for r in rows:
+            for k in ("prices", "full"):
+                r[k] = {int(d): v for d, v in json.loads(r[k]).items()} if r[k] else None
+        return rows

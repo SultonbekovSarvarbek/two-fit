@@ -22,10 +22,12 @@ from aiohttp import web
 from ..bot.callbacks import AdmCb
 from ..bot.context import Ctx
 from ..bot.notify import Notifier
-from ..bot.ui import btn, esc, kb
+from ..bot.ui import btn, esc, kb, price_advice
 from ..config import Config
+from ..money import fmt_money
 from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
+from ..pricing import advise
 from ..usage import remaining, usage
 from ..validators import (
     DESC_MAX,
@@ -70,7 +72,19 @@ class ApiError(Exception):
 
 
 # ------------------------------------------------------------------ serializers
-def public_view(listing: dict[str, Any]) -> dict[str, Any]:
+def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> dict[str, int] | None:
+    """What the buyer pays per month of use next to what 1Fit charges; None when it is not cheaper."""
+    if listing["kind"] == LK.PROMO:
+        return None
+    installment = listing["paid_in_full"] == 0
+    a = advise(listing["end_date"], today_local(), fit_prices,
+               listing["monthly_payment"] if installment else None, listing["payments_left"] if installment else None)
+    if not a or a.saving(listing["price"]) <= 0:
+        return None
+    return {"month": a.month_cost(listing["price"]), "fit_month": a.fit_month, "saving": a.saving(listing["price"])}
+
+
+def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = None) -> dict[str, Any]:
     """Only what a buyer may see — never the seller's identity, contacts or screenshot."""
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
@@ -81,6 +95,7 @@ def public_view(listing: dict[str, Any]) -> dict[str, Any]:
     view["paid_in_full"] = None if paid is None else bool(paid)  # None: listed before the question existed
     view["monthly_payment"] = listing["monthly_payment"] if paid == 0 else None
     view["payments_left"] = listing["payments_left"] if paid == 0 else None
+    view["month_cost"] = month_cost(listing, fit_prices)
     return view
 
 
@@ -89,7 +104,7 @@ def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
     expired = status == LS.APPROVED and Repo.is_expired(listing)
     c = ctx.commission(listing["price"], percent=ctx.repo.listing_percent(listing))
     return {
-        **public_view(listing),
+        **public_view(listing, ctx.repo.fit_prices),
         "promo_code": listing["promo_code"],
         "percent": c.percent,  # the rate this listing was accepted at
         "rate_changed": c.percent != ctx.percent(listing["kind"]),  # editing means accepting today's rate
@@ -122,6 +137,7 @@ class WebApp:
         r.add_get("/api/my", self.my)
         r.add_post("/api/screenshot", self.screenshot)
         r.add_post("/api/listings", self.create)
+        r.add_post("/api/advice", self.advice)
         r.add_get(r"/api/listings/{id:\d+}", self.listing)
         r.add_put(r"/api/listings/{id:\d+}", self.update)
         r.add_post(r"/api/listings/{id:\d+}/request", self.request_purchase)
@@ -249,7 +265,7 @@ class WebApp:
         rows, total = await self.repo.catalog(city or None, limit, offset)
         cities = await self.repo.catalog_cities()
         return web.json_response({
-            "items": [public_view(r) for r in rows],
+            "items": [public_view(r, self.repo.fit_prices) for r in rows],
             "total": total,
             "city": city,
             "cities": [{"code": code, "count": n} for code, n in cities],
@@ -264,7 +280,7 @@ class WebApp:
         if not self.repo.is_available(listing):
             raise ApiError(404, "not_available", ctx.t("common.not_available"))
         requested = bool(await self.repo.active_request(listing_id, ctx.user_id))
-        return web.json_response({"listing": public_view(listing), "own": False, "requested": requested})
+        return web.json_response({"listing": public_view(listing, self.repo.fit_prices), "own": False, "requested": requested})
 
     async def request_purchase(self, request: web.Request) -> web.Response:
         ctx = request[CTX]
@@ -336,6 +352,10 @@ class WebApp:
             draft["promo_code"] = self._field(ctx, "promo_code", parse_promo_code, body.get("promo_code"))
         else:
             self._membership_fields(ctx, body, draft, number)
+        a = price_advice(ctx, draft)
+        if a and a.too_high(draft["price"]):
+            raise ApiError(400, "price_too_high", ctx.t("err.price_too_high", max=fmt_money(a.max_price),
+                                                        price=fmt_money(a.recommended)), "price")
         # The seller ticks the consent for one exact price; a different price means no consent.
         if body.get("accepted_price") != draft["price"]:
             raise ApiError(400, "commission_not_accepted", ctx.t("app.err.accept"), "accept")
@@ -376,6 +396,31 @@ class WebApp:
         if not paid:
             draft["monthly_payment"] = self._field(ctx, "monthly_payment", parse_monthly, number("monthly_payment"))
             draft["payments_left"] = self._field(ctx, "payments_left", parse_payments_left, number("payments_left"))
+
+    async def advice(self, request: web.Request) -> web.Response:
+        """Recommended price for the sell form, from the end date and the installments typed so far.
+        Half-filled forms are fine: anything not valid yet simply gives no advice."""
+        ctx = request[CTX]
+        body = await self._json(request)
+        try:
+            end = self._iso_date(body.get("end_date"), today_local())
+        except ValidationError:
+            return web.json_response({"advice": None})
+        draft: dict[str, Any] = {"kind": LK.MEMBERSHIP, "end_date": end, "paid_in_full": body.get("paid_in_full") is not False}
+        if not draft["paid_in_full"]:
+            try:
+                draft["monthly_payment"] = parse_monthly(str(body.get("monthly_payment") or ""))
+                draft["payments_left"] = parse_payments_left(str(body.get("payments_left") or ""))
+            except ValidationError:
+                return web.json_response({"advice": None})
+        a = price_advice(ctx, draft)
+        if not a:
+            return web.json_response({"advice": None})
+        return web.json_response({"advice": {
+            "recommended": a.recommended, "max": a.max_price, "min": a.min_price, "installments": a.installments,
+            "month": a.month_cost(a.recommended), "fit_month": a.fit_month, "saving": a.saving(a.recommended),
+            "days_left": a.days_left, "base_days": a.base_days,
+        }})
 
     async def screenshot(self, request: web.Request) -> web.Response:
         """The picture goes to the seller's own chat with the bot; Telegram then stores it for the admin."""
