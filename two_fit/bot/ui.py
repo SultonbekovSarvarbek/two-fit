@@ -188,6 +188,18 @@ def advice_text(ctx: Ctx, a: Advice) -> str:
     return text + ctx.t("advice.max", max=fmt_money(a.max_price))
 
 
+SAVE_BADGE_MIN = 5  # a 2% saving is noise, not a selling point
+
+
+def saving_mark(ctx: Ctx, data: dict[str, Any]) -> str:
+    """« · 🔥 −38%» on a catalog button: the saving against 1Fit, when it is real and believable."""
+    a = price_advice(ctx, data)
+    price = data.get("price")
+    if not a or not price or a.suspicious(price) or a.saving(price) < SAVE_BADGE_MIN:
+        return ""
+    return ctx.t("catalog.saving", saving=a.saving(price))
+
+
 def month_line(ctx: Ctx, data: dict[str, Any]) -> str:
     """«≈ 459 000 сум/мес · у 1Fit 658 000 (−30%)» — the per-month cost the buyer compares with 1Fit."""
     a = price_advice(ctx, data)

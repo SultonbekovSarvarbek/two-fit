@@ -384,4 +384,18 @@ async def test_catalog_explains_the_saving(h, api):  # noqa: F811
     assert set(m) == {"month", "fit_month", "saving", "saved"}
     assert m["month"] % 1000 == 0 and m["fit_month"] % 1000 == 0 and m["saved"] > 0
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
-    assert {"app.mc.row_title", "app.mc.row_text", "app.mc.hero_title", "app.mc.hero_text"} <= set(boot["texts"])
+    assert {"app.badge.saving", "app.mc.row_text", "app.mc.hero_title", "app.mc.hero_text"} <= set(boot["texts"])
+
+
+
+async def test_bot_catalog_button_shows_the_saving(h):
+    from two_fit.bot.context import Ctx
+    from two_fit.bot.ui import saving_mark
+    from two_fit.i18n import I18n
+    ctx = Ctx(h.repo, I18n(), h.cfg, {"id": SELLER, "lang": "ru"})
+    end = (today_local() + timedelta(days=300)).isoformat()
+    a = advise(end, today_local(), plan_days=365)
+    base = {"kind": "membership", "end_date": end, "tariff_days": 365, "paid_in_full": True}
+    assert saving_mark(ctx, {**base, "price": a.recommended}) == f" · 🔥 −{a.saving(a.recommended)}%"
+    assert saving_mark(ctx, {**base, "price": 300_000}) == ""            # suspicious: no boasting
+    assert saving_mark(ctx, {**base, "price": round(a.fit_value)}) == ""  # no saving at all
