@@ -97,6 +97,17 @@ def check_plan_end(end: date, today: date, plan_days: int | None) -> None:
         raise ValidationError("bad_end_for_plan")
 
 
+FREEZE_DAYS_MAX = 365
+
+
+def parse_freeze_days(text: str | None) -> int:
+    """Unused freeze days the buyer gets with the membership: «20» or «20 дней»."""
+    m = re.fullmatch(r"\s*(\d{1,3})\s*[^\d]*", text or "")
+    if not m or not 1 <= int(m.group(1)) <= FREEZE_DAYS_MAX:
+        raise ValidationError("bad_freeze_days")
+    return int(m.group(1))
+
+
 def parse_monthly(text: str | None) -> int:
     """Installment: how much the seller pays 1Fit every month; the buyer takes these payments over."""
     try:

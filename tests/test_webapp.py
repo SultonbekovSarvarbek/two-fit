@@ -201,7 +201,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
                              "description", "paid_in_full", "monthly_payment", "payments_left", "kind", "left",
-                             "month_cost", "tariff_days"}
+                             "month_cost", "tariff_days", "freeze_days"}
         # No start date, but the 12-month tariff gives it: «used 5 of 12 months» still shows.
         assert item["start_date"] is None and item["tariff_days"] == 365 and item["usage"]["total"] == 12
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
@@ -483,7 +483,7 @@ async def test_promo_codes_hidden_by_default(tmp_path):
         await h.send(SELLER, "/start")
         await h.click(SELLER, "lang:ru")
         first = texts(await h.send(SELLER, "➕ Продать абонемент"))
-        assert "Шаг 1/9" in first and "Что вы продаёте" not in first and "промокод" not in first
+        assert "Шаг 1/10" in first and "Что вы продаёте" not in first and "промокод" not in first
         assert "промокод" not in texts(await h.send(SELLER, "ℹ️ Как это работает"))
     finally:
         await h.stop()
@@ -492,3 +492,13 @@ async def test_promo_codes_hidden_by_default(tmp_path):
 def T(boot, key):
     import re
     return re.sub(r"\{(\w+)\}", lambda m: str(boot["vars"].get(m.group(1), "")), boot["texts"][key])
+
+
+async def test_freeze_days_are_saved_and_shown(h, api):
+    status, err = await api.call("POST", "/api/listings", SELLER, draft(freeze_days=400))
+    assert (status, err["field"]) == (400, "freeze_days")
+    lid = await publish(h, api, freeze_days=20)
+    none = await publish(h, api)  # no freeze days: stored as 0
+    _, card = await api.call("GET", f"/api/listings/{lid}", BUYER)
+    assert card["listing"]["freeze_days"] == 20
+    assert (await h.repo.get_listing(none))["freeze_days"] == 0

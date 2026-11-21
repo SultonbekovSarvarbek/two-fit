@@ -25,6 +25,7 @@ class Config:
     webapp_port: int = 8080
     promo_commission_percent: int = 30  # for a promo code
     promo_enabled: bool = False  # selling 1Fit promo codes: hidden until it is clear which codes are worth selling
+    auto_price: bool = False  # a membership's price is the recommended one, not typed by the seller (on in production)
     # 1Fit price watcher: reads 1Fit's Tashkent prices and tells the admins when they change.
     fit_watch: bool = True
     fit_api_url: str = "https://api-uz.1fit.app/api/landing/v2/subscriptions/?city_id=1"
@@ -71,6 +72,7 @@ def load_config() -> Config:
         webapp_port=int(os.getenv("WEBAPP_PORT", "8080")),
         promo_commission_percent=int(os.getenv("PROMO_COMMISSION_PERCENT", "30")),
         promo_enabled=os.getenv("PROMO_ENABLED", "").strip().lower() in ("1", "true", "yes", "on"),
+        auto_price=os.getenv("AUTO_PRICE", "1").strip().lower() not in ("0", "false", "no", "off"),
         fit_watch=os.getenv("FIT_WATCH", "1").strip().lower() not in ("0", "false", "no", "off", ""),
         fit_api_url=os.getenv("FIT_API_URL", "").strip() or Config.fit_api_url,
         fit_watch_times=os.getenv("FIT_WATCH_TIMES", "").strip() or Config.fit_watch_times,

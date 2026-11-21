@@ -24,7 +24,7 @@ from ..bot.context import Ctx
 from ..bot.notify import Notifier
 from ..bot.ui import btn, esc, kb, price_advice
 from ..config import Config
-from ..money import fmt_money
+from ..money import fmt_money, round_k
 from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
 from ..pricing import advise
@@ -44,6 +44,7 @@ from ..validators import (
     normalize_phone,
     parse_description,
     parse_end_date,
+    parse_freeze_days,
     parse_monthly,
     parse_payments_left,
     parse_start_date,
@@ -87,7 +88,9 @@ def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> di
         return {"suspicious": True}
     if not a or a.saving(listing["price"]) <= 0:
         return None
-    return {"month": a.month_cost(listing["price"]), "fit_month": a.fit_month, "saving": a.saving(listing["price"])}
+    price = listing["price"]
+    return {"month": round_k(a.month_cost(price)), "fit_month": round_k(a.fit_month), "saving": a.saving(price),
+            "saved": round_k(a.saved(price))}
 
 
 def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = None) -> dict[str, Any]:
@@ -96,6 +99,7 @@ def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = Non
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["kind"] = listing["kind"]  # the promo code itself is never public
     view["tariff_days"] = listing["tariff_days"]  # 180 / 365 / 730, None on old listings
+    view["freeze_days"] = listing["freeze_days"]  # unused freeze days the buyer gets; 0 none, None not asked
     view["usage"] = usage(listing["start_date"], listing["end_date"], today_local(), listing["tariff_days"])
     view["left"] = remaining(listing["end_date"], today_local())
     paid = listing["paid_in_full"]
@@ -234,7 +238,7 @@ class WebApp:
             "texts": texts,
             "vars": {"operator": self.cfg.operator, "percent": self.cfg.commission_percent,
                      "promo_percent": self.cfg.promo_commission_percent, "fees": ctx.fees(),
-                     "promo_enabled": self.cfg.promo_enabled},
+                     "promo_enabled": self.cfg.promo_enabled, "auto_price": self.cfg.auto_price},
             "support_url": self.cfg.support_url,
             "cities": list(CITIES),
             "user": {"name": ctx.user.get("contact_name") or "", "phone": ctx.user.get("contact_phone") or ""},
@@ -345,7 +349,6 @@ class WebApp:
         draft = {
             "city": city,
             "end_date": self._field(ctx, "end_date", self._iso_date, body.get("end_date"), today_local()),
-            "price": self._field(ctx, "price", parse_price, raw_price),
             "price_negotiable": body.get("price_negotiable") is True,
             "description": self._field(ctx, "description", parse_description, body.get("description") or ""),
         }
@@ -361,10 +364,15 @@ class WebApp:
         else:
             self._membership_fields(ctx, body, draft, number)
         a = price_advice(ctx, draft)
-        if a and a.too_high(draft["price"]):
+        if a and self.cfg.auto_price:
+            # The price is the recommended one, worked out here: whatever the app sent is not trusted.
+            draft["price"] = a.recommended
+        else:
+            draft["price"] = self._field(ctx, "price", parse_price, raw_price)
+        if a and not self.cfg.auto_price and a.too_high(draft["price"]):
             raise ApiError(400, "price_too_high", ctx.t("err.price_too_high", max=fmt_money(a.max_price),
                                                         price=fmt_money(a.recommended)), "price")
-        if a and a.suspicious(draft["price"]) and body.get("low_price_ok") is not True:
+        if a and not self.cfg.auto_price and a.suspicious(draft["price"]) and body.get("low_price_ok") is not True:
             # «485 000 for 9 months» is almost surely the monthly price: the seller confirms it first.
             raise ApiError(400, "price_suspicious", ctx.t(
                 "app.err.price_suspicious", price=fmt_money(draft["price"]), month=fmt_money(a.month_cost(draft["price"])),
@@ -404,6 +412,13 @@ class WebApp:
         if plan not in TARIFF_PLANS or isinstance(plan, bool):
             raise ApiError(400, "bad_plan", ctx.t("app.err.plan"), "tariff_days")
         draft["tariff_days"] = plan
+        # Freeze days: 0 = none; a number = that many unused days go to the buyer.
+        freeze = body.get("freeze_days")
+        if freeze in (None, 0, "", "0"):
+            draft["freeze_days"] = 0
+        else:
+            draft["freeze_days"] = self._field(ctx, "freeze_days", parse_freeze_days,
+                                               str(freeze) if isinstance(freeze, int) else freeze)
         try:
             check_plan_end(date.fromisoformat(draft["end_date"]), today_local(), plan)
         except ValidationError as e:
@@ -441,7 +456,8 @@ class WebApp:
             return web.json_response({"advice": None})
         return web.json_response({"advice": {
             "recommended": a.recommended, "max": a.max_price, "min": a.min_price, "installments": a.installments,
-            "month": a.month_cost(a.recommended), "fit_month": a.fit_month, "saving": a.saving(a.recommended),
+            "month": round_k(a.month_cost(a.recommended)), "fit_month": round_k(a.fit_month),
+            "saving": a.saving(a.recommended),
             "days_left": a.days_left, "base_days": a.base_days,
         }})
 

@@ -89,13 +89,14 @@ async def walk_to_price(h, days=200):
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, (today_local() + timedelta(days=days)).strftime("%d.%m.%Y"))
     await h.click(SELLER, "sl:skip:")
-    return await h.click(SELLER, "sl:pay:full")
+    await h.click(SELLER, "sl:pay:full")
+    return await h.click(SELLER, "sl:freeze:no")
 
 
 async def test_bot_shows_and_applies_the_recommended_price(h):
     a = advise((today_local() + timedelta(days=200)).isoformat(), today_local())
     ask = texts(await walk_to_price(h))
-    assert "Рекомендуемая цена" in ask and "сум/мес" in ask and "1Fit" in ask
+    assert "Рекомендуемая цена" in ask and "сум в месяц" in ask and "1Fit" in ask
     cb = h.button(SELLER, "Поставить")
     assert cb == f"sl:advice:{a.recommended}"
     calc = texts(await h.click(SELLER, cb))
@@ -123,7 +124,9 @@ async def test_card_shows_the_cost_per_month(h):
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
-    assert "сум/мес</b> · у 1Fit" in preview
+    # In words: «it comes to … a month — 1Fit charges … a month; … cheaper, you save ≈ …», round sums
+    assert "Выходит <b>" in preview and "сум в месяц</b> — в 1Fit" in preview and "экономия ≈" in preview
+    assert "000 сум в месяц</b>" in preview
 
 
 def _key(h):
@@ -296,5 +299,89 @@ async def test_bot_card_flags_a_suspicious_price(h):
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
-    assert "Очень низкая цена" in preview and "сум/мес</b> · у 1Fit" not in preview
+    assert "Очень низкая цена" in preview and "экономия" not in preview
     assert "Использовано" in preview  # the 12-month tariff gives «used … of 12 months» without a start date
+
+
+# ------------------------------------------------------------------ AUTO_PRICE: the price is the recommended one
+def test_auto_price_is_on_by_default(monkeypatch):
+    from two_fit.config import load_config
+    monkeypatch.delenv("AUTO_PRICE", raising=False)
+    monkeypatch.setattr("two_fit.config.load_dotenv", lambda *a, **k: None)
+    assert load_config().auto_price is True
+    monkeypatch.setenv("AUTO_PRICE", "0")
+    assert load_config().auto_price is False
+
+
+async def test_auto_price_in_the_mini_app(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from two_fit.i18n import I18n
+    from two_fit.webapp.server import create_webapp
+
+    from .test_webapp import END
+
+    h = await Harness(tmp_path / "auto.db", auto_price=True).start()
+    try:
+        async with TestClient(TestServer(create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"]))) as client:
+            a = advise(END, today_local(), plan_days=365)
+            api = Api(client, h.cfg.bot_token)
+            _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+            assert boot["vars"]["auto_price"] is True
+            # Whatever price the app sends, the listing gets the recommended one; the consent is for that price.
+            status, err = await api.call("POST", "/api/listings", SELLER, draft(price="1", accepted_price=1))
+            assert (status, err["field"]) == (400, "accept")
+            status, made = await api.call("POST", "/api/listings", SELLER,
+                                          draft(price="999 999 999", accepted_price=a.recommended))
+            assert status == 201, made
+            assert (await h.repo.get_listing(made["id"]))["price"] == a.recommended
+    finally:
+        await h.stop()
+
+
+async def test_auto_price_in_the_bot(tmp_path):
+    h = await Harness(tmp_path / "auto-bot.db", auto_price=True).start()
+    try:
+        end = today_local() + timedelta(days=200)
+        a = advise(end.isoformat(), today_local(), plan_days=365)
+        await h.send(SELLER, "/start")
+        await h.click(SELLER, "lang:ru")
+        await h.send(SELLER, "➕ Продать абонемент")
+        await h.click(SELLER, "sl:kind:membership")
+        await h.click(SELLER, "sl:city:tashkent")
+        await h.click(SELLER, "sl:plan:365")
+        await h.send(SELLER, end.strftime("%d.%m.%Y"))
+        await h.click(SELLER, "sl:skip:")
+        await h.click(SELLER, "sl:pay:full")
+        nxt = texts(await h.click(SELLER, "sl:freeze:no"))
+        assert "Шаг 7/9" in nxt and "описание" in nxt  # no price question: straight to the description
+        await h.click(SELLER, "sl:skip:")
+        await h.click(SELLER, "sl:skip:")
+        await h.send(SELLER, "Алишер")
+        preview = texts(await h.send(SELLER, contact="+998901112233"))
+        assert "рассчитана автоматически" in preview and f"{a.recommended:,}".replace(",", "\xa0") in preview
+        await h.click(SELLER, "sl:accept:")
+        await h.click(SELLER, "sl:send:")
+        listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
+        assert listing["price"] == listing["commission_accepted_price"] == a.recommended
+    finally:
+        await h.stop()
+
+
+def test_saving_in_sums_and_round_numbers():
+    from two_fit.money import round_k
+    a = advise(end_in(300), TODAY, plan_days=365)
+    assert a.saved(a.recommended) == round(a.fit_value - a.recommended)
+    assert a.saved(10**9) == 0  # never a negative saving
+    assert (round_k(465_287), round_k(657_950), round_k(499)) == (465_000, 658_000, 0)
+
+
+async def test_catalog_explains_the_saving(h, api):  # noqa: F811
+    lid = (await api.call("POST", "/api/listings", SELLER, draft()))[1]["id"]
+    await h.repo.approve(lid, ADMIN)
+    _, cat = await api.call("GET", "/api/catalog", SELLER)
+    m = cat["items"][0]["month_cost"]
+    assert set(m) == {"month", "fit_month", "saving", "saved"}
+    assert m["month"] % 1000 == 0 and m["fit_month"] % 1000 == 0 and m["saved"] > 0
+    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+    assert {"app.mc.row_title", "app.mc.row_text", "app.mc.hero_title", "app.mc.hero_text"} <= set(boot["texts"])

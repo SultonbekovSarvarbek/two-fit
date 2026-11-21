@@ -174,7 +174,9 @@ p { margin: 0; }
 /* The per-month comparison is the point of the card, so it gets the main text colour, not the faint hint:
    on the lime price card the hint grey of the dark theme all but vanished. */
 .month-cost { font-size: 13px; font-weight: 500; color: var(--text); opacity: 0.82; margin-top: 6px; }
-.hero .month-cost { font-size: 14px; font-weight: 600; color: var(--ink); opacity: 1; margin-top: 10px; }
+.hero .month-cost { font-size: 14px; font-weight: 500; color: var(--ink); opacity: 1; margin-top: 12px; line-height: 1.4; }
+.month-cost b { font-weight: 700; }
+.hero .month-cost b { font-size: 16px; }
 .month-cost.warn { color: var(--danger); font-weight: 600; opacity: 1; }
 .hero .month-cost.warn { color: #8A1C12; }
 
@@ -193,7 +195,7 @@ p { margin: 0; }
 
 /* forms */
 .field { display: block; padding: 11px 16px 12px; position: relative; }
-.field + .field, .field + .check { border-top: 1px solid var(--line); }
+.field + .field, .field + .check, .check + .field { border-top: 1px solid var(--line); }
 .field > span { display: block; font-size: 12.5px; color: var(--hint); margin-bottom: 2px; }
 .field input, .field select, .field textarea {
   display: block; width: 100%; border: 0; outline: 0; background: transparent; padding: 2px 0; margin: 0;
@@ -463,10 +465,16 @@ const payBadge = (l) => installment(l) ? h("span", { class: "badge ptype inst" }
 // «≈ 459 000 сум/мес · у 1Fit 658 000 (−30%)»: buyers compare with 1Fit's monthly installments, not the total.
 // A price far too low for the whole term («485 000 for 9 months») is flagged, never shown as a −92% bargain.
 const suspicious = (l) => !!(l.month_cost && l.month_cost.suspicious);
-const monthCost = (l) => !l.month_cost ? null
-  : suspicious(l) ? h("div", { class: "month-cost warn" }, T("app.month_suspicious"))
-  : h("div", { class: "month-cost num" },
-    T("app.month_cost", { month: money(l.month_cost.month), fit_month: money(l.month_cost.fit_month), saving: l.month_cost.saving }));
+// In words a buyer understands: «29% cheaper than at 1Fit · 465 000 a month instead of 658 000».
+const monthCost = (l, big) => {
+  const m = l.month_cost;
+  if (!m) return null;
+  if (suspicious(l)) return h("div", { class: "month-cost warn" }, T("app.month_suspicious"));
+  const vars = { month: money(m.month), fit_month: money(m.fit_month), saving: m.saving, saved: money(m.saved) };
+  return big
+    ? h("div", { class: "month-cost num" }, h("b", null, T("app.mc.hero_title", vars)), h("div", null, T("app.mc.hero_text", vars)))
+    : h("div", { class: "month-cost num" }, h("b", null, T("app.mc.row_title", vars)), h("div", null, T("app.mc.row_text", vars)));
+};
 const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.negotiable") : "");
 
 async function fetchCatalog(reset) {
@@ -514,6 +522,8 @@ function publicRows(l) {
       : h("div", null, h("span", { class: "k" }, T("app.f.time_left")), h("span", { class: "v num" }, leftText(l))),
     l.start_date ? h("div", null, h("span", { class: "k" }, T("app.f.start")), h("span", { class: "v num" }, dmy(l.start_date))) : null,
     h("div", null, h("span", { class: "k" }, T(isPromo(l) ? "app.f.date_promo" : "app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))),
+    l.freeze_days ? h("div", null, h("span", { class: "k" }, "❄️ " + T("app.f.freeze_short")),
+      h("span", { class: "v num" }, T("app.freeze_row", { days: l.freeze_days }))) : null,
     l.paid_in_full == null ? null : h("div", null, h("span", { class: "k" }, T("app.f.pay_short")),
       h("span", { class: "v num" }, installment(l) ? T("app.pay.installment_row", installmentVars(l)) : T("app.pay.full_row"))));
 }
@@ -521,7 +531,7 @@ function priceHero(l) {
   return h("div", { class: "card hero" },
     h("div", { class: "label" }, T("app.f.price")),
     h("div", { class: "value num" }, money(l.price) + " ", h("small", null, T("app.sum"))),
-    promoBadge(l), priceBadge(l), monthCost(l),
+    promoBadge(l), priceBadge(l), monthCost(l, true),
     installment(l) ? h("div", { class: "inst-note num" }, "💳 " + T("app.pay.installment_note", installmentVars(l))) : null);
 }
 
@@ -604,9 +614,10 @@ function buyView(view) {
 function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
-        kind: l.kind, code: l.promo_code || "", plan: l.tariff_days || null, paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "",
+        kind: l.kind, code: l.promo_code || "", plan: l.tariff_days || null,
+        freeze: !!l.freeze_days, freezeDays: l.freeze_days ? String(l.freeze_days) : "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "",
         name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: !l.rate_changed }  // shot: an earlier screenshot stays attached
-    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
+    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
 
 function sellForm(d, onDone, onKind) {
@@ -663,6 +674,11 @@ function sellForm(d, onDone, onKind) {
     });
     return el;
   };
+  // Unused freeze days go to the buyer with the membership.
+  const freeze = h("input", { type: "checkbox", checked: d.freeze });
+  const freezeRow = h("label", { class: "check" }, freeze, h("span", null, "❄️ " + T("app.f.freeze")));
+  const freezeDays = digitsInput("freezeDays", 3, "20");
+  freeze.addEventListener("change", () => { d.freeze = freeze.checked; drawFreeze(); });
   const monthly = digitsInput("monthly", 9, "500 000");
   const left = digitsInput("left", 2, "9");
   monthly.addEventListener("input", () => loadAdvice());
@@ -703,7 +719,30 @@ function sellForm(d, onDone, onKind) {
     priceWarn.textContent = text;
     priceWarn.hidden = !text;
   };
+  // AUTO_PRICE: a membership costs the recommended price; the card shows it instead of a price field.
+  const autoPrice = () => B.vars.auto_price && d.kind === "membership";
+  const drawAuto = () => {
+    adviceCard.hidden = false;
+    if (!advice) {
+      adviceCard.replaceChildren(h("div", { class: "label" }, "💰 " + T("app.sell.price_auto")),
+        h("p", null, T("app.sell.price_auto_wait")));
+      return;
+    }
+    adviceCard.replaceChildren(...[
+      h("div", { class: "label" }, "💰 " + T("app.sell.price_auto")),
+      h("div", { class: "row" }, h("div", { class: "value num" }, money(advice.recommended) + " " + T("app.sum"))),
+      h("p", null, T("app.sell.price_auto_hint")),
+      advice.max ? h("p", null, T("app.advice.text", { month: money(advice.month), fit_month: money(advice.fit_month), saving: advice.saving }))
+        : h("p", null, T("app.advice.heavy", { total: money(advice.installments) })),
+      advice.max && advice.installments ? h("p", null, T("app.advice.installment", { total: money(advice.installments) })) : null,
+    ].filter(Boolean));
+  };
   const drawAdvice = () => {
+    if (autoPrice()) {
+      setPrice(advice ? String(advice.recommended) : "");
+      drawAuto();
+      return;
+    }
     const show = d.kind === "membership" && advice;
     adviceCard.hidden = !show;
     if (!show) { drawAdviceCheck(); return; }
@@ -722,7 +761,7 @@ function sellForm(d, onDone, onKind) {
   const loadAdvice = () => {
     clearTimeout(adviceTimer);
     adviceTimer = setTimeout(async () => {
-      if (d.kind !== "membership" || !d.end_date || d.paid == null) { advice = null; drawAdvice(); return; }
+      if (d.kind !== "membership" || !d.end_date || d.paid == null || (autoPrice() && !d.plan)) { advice = null; drawAdvice(); return; }
       const req = ++adviceReq;
       try {
         const res = await api("POST", "advice", { end_date: d.end_date, paid_in_full: d.paid, tariff_days: d.plan,
@@ -753,6 +792,7 @@ function sellForm(d, onDone, onKind) {
     payment: payWrap,
     monthly_payment: field(T("app.f.monthly"), monthly),
     payments_left: field(T("app.f.left"), left),
+    freeze_days: field(T("app.f.freeze_days"), freezeDays),
     price: field(T("app.f.price"), price, { hint: T("app.sell.price_hint") }),
     description: field(T("app.f.desc"), desc, { extra: counter }),
     accept: acceptRow,
@@ -760,6 +800,9 @@ function sellForm(d, onDone, onKind) {
   const priceHint = fields.price.querySelector(".hint");
   const label = (wrap) => wrap.querySelector("span");
   const payCard = h("div", { class: "card" }, fields.payment, fields.monthly_payment, fields.payments_left);
+  const freezeCard = h("div", { class: "card" }, freezeRow, fields.freeze_days);
+  const drawFreeze = () => { fields.freeze_days.hidden = !d.freeze; };
+  const drawPriceMode = () => { fields.price.hidden = autoPrice(); };
   const drawPay = () => {
     paySeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.paid === (b.dataset.full === "true"))));
     fields.monthly_payment.hidden = fields.payments_left.hidden = d.paid !== false;
@@ -775,6 +818,8 @@ function sellForm(d, onDone, onKind) {
     fields.tariff_days.hidden = promo;
     drawPlan();
     payCard.hidden = promo;
+    freezeCard.hidden = promo;
+    drawFreeze(); drawPriceMode();
     fields.tariff.hidden = !promo;  // only a promo code says what it gives
     label(fields.end_date).textContent = T(promo ? "app.f.date_promo" : "app.f.date");
     acceptText.textContent = T("app.sell.accept", { percent: pct(d.kind) });
@@ -788,9 +833,11 @@ function sellForm(d, onDone, onKind) {
     if (!d.kind) { showFieldError(fields, { field: "kind", message: T("app.err.kind") }); return; }
     if (d.kind === "membership" && !d.plan) { showFieldError(fields, { field: "tariff_days", message: T("app.err.plan") }); return; }
     if (d.kind === "membership" && d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
+    if (d.kind === "membership" && d.freeze && !Number(d.freezeDays)) { showFieldError(fields, { field: "freeze_days", message: T("app.err.freeze_days") }); return; }
     if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
     submit.disabled = true;
-    const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
+    const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null,
+                   freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
                    kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
                    paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
                    description: d.description, accepted_price: Number(d.price), screenshot: d.shot };
@@ -815,6 +862,7 @@ function sellForm(d, onDone, onKind) {
     d.id || !B.vars.promo_enabled ? null : h("div", { class: "card" }, fields.kind),
     h("div", { class: "card" }, fields.city, fields.tariff_days, fields.tariff, fields.end_date, fields.start_date, fields.promo_code),
     payCard,
+    freezeCard,
     adviceCard,
     h("div", { class: "card" }, fields.price, priceWarn, negotiableRow), calc,
     h("div", { class: "card" }, fields.description),

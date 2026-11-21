@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS listings (
     monthly_payment           INTEGER,            -- installment: what the buyer keeps paying every month
     payments_left             INTEGER,            -- installment: how many of those payments are left
     tariff_days               INTEGER,            -- membership: the 1Fit tariff, 180 / 365 / 730 days; NULL on old listings
+    freeze_days               INTEGER,            -- membership: unused freeze days (0 = none); NULL on old listings
     description               TEXT NOT NULL DEFAULT '',
     screenshot_file_id        TEXT,
     seller_name               TEXT NOT NULL,
@@ -232,8 +233,9 @@ class Repo:
             await self.db.execute("ALTER TABLE listings ADD COLUMN kind TEXT NOT NULL DEFAULT 'membership'")
         if "promo_code" not in columns:
             await self.db.execute("ALTER TABLE listings ADD COLUMN promo_code TEXT")
-        if "tariff_days" not in columns:
-            await self.db.execute("ALTER TABLE listings ADD COLUMN tariff_days INTEGER")
+        for column in ("tariff_days", "freeze_days"):
+            if column not in columns:
+                await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} INTEGER")
         if "commission_percent" not in columns:
             # Listings made before the rate was stored were accepted at 10% (membership) and 30% (promo code).
             await self.db.execute("ALTER TABLE listings ADD COLUMN commission_percent INTEGER")
@@ -368,10 +370,11 @@ class Repo:
 
     @staticmethod
     def _kind_fields(draft: dict[str, Any]) -> tuple[Any, ...]:
-        """kind, promo_code, tariff_days, start_date, paid_in_full, monthly_payment, payments_left — by what is sold."""
+        """kind, promo_code, tariff_days, freeze_days, start_date, paid_in_full, monthly_payment, payments_left."""
         if draft.get("kind") == LK.PROMO:
-            return LK.PROMO, draft["promo_code"], None, None, None, None, None
-        return (LK.MEMBERSHIP, None, draft["tariff_days"], draft.get("start_date"), *Repo._payment(draft))
+            return LK.PROMO, draft["promo_code"], None, None, None, None, None, None
+        return (LK.MEMBERSHIP, None, draft["tariff_days"], draft.get("freeze_days"), draft.get("start_date"),
+                *Repo._payment(draft))
 
     @staticmethod
     def _payment(draft: dict[str, Any]) -> tuple[int, int | None, int | None]:
@@ -384,11 +387,12 @@ class Repo:
         async with self.tx():
             ts = now_iso()
             cur = await self.db.execute(
-                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, kind, promo_code, tariff_days, start_date,
+                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, kind, promo_code, tariff_days, freeze_days,
+                       start_date,
                        paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
                        commission_percent, status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
@@ -410,7 +414,7 @@ class Repo:
             if listing["status"] not in LS.SELLER_EDITABLE:
                 raise RepoError("bad_status")
             await self.db.execute(
-                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, tariff_days=?, start_date=?,
+                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, tariff_days=?, freeze_days=?, start_date=?,
                        paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?, commission_percent=?,
                        status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?

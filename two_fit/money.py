@@ -27,6 +27,11 @@ def calc_commission(price: int, percent: int) -> Commission:
     return Commission(price=price, percent=percent, commission=commission, net=price - commission)
 
 
+def round_k(amount: float) -> int:
+    """465 287 -> 465 000: buyers read round sums, the last digits only get in the way."""
+    return int(round(amount / 1000) * 1000)
+
+
 def fmt_money(amount: int) -> str:
     """2000000 -> '2 000 000' (non-breaking spaces so it never wraps)."""
     return f"{amount:,}".replace(",", NBSP)

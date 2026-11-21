@@ -42,6 +42,10 @@ class Advice:
         """What the buyer pays per month of use: the price plus the installments he takes over."""
         return round((price + self.installments) / (self.days_left / DAYS_PER_MONTH))
 
+    def saved(self, price: int) -> int:
+        """How much the buyer saves in all against buying the same days at 1Fit."""
+        return max(0, round(self.fit_value - price - self.installments))
+
     def saving(self, price: int) -> int:
         """How much cheaper than 1Fit, in percent (may be negative)."""
         return round((1 - self.month_cost(price) / self.fit_month) * 100) if self.fit_month else 0
