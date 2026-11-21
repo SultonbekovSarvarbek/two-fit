@@ -8,11 +8,10 @@ LOCALES_DIR = Path(__file__).resolve().parent / "locales"
 LANGS = ("ru", "uz")
 DEFAULT_LANG = "ru"
 
-# City codes, in the order they are offered to sellers. Names are in the locale files: "city.<code>".
-CITIES = (
-    "tashkent", "samarkand", "bukhara", "andijan", "namangan", "fergana", "nukus",
-    "karshi", "termez", "jizzakh", "gulistan", "navoi", "urgench", "nurafshon",
-)
+# Cities where 1Fit works, in the order they are offered to sellers. Names are in the locale files: "city.<code>".
+CITIES = ("tashkent", "samarkand", "bukhara", "andijan", "namangan", "fergana", "navoi")
+# Offered before 1Fit's list was checked. No longer offered, but listings made there keep their name and filter.
+LEGACY_CITIES = ("nukus", "karshi", "termez", "jizzakh", "gulistan", "urgench", "nurafshon")
 
 
 class I18n:

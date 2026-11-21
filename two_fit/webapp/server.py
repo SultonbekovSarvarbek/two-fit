@@ -24,7 +24,7 @@ from ..bot.context import Ctx
 from ..bot.notify import Notifier
 from ..bot.ui import btn, esc, kb
 from ..config import Config
-from ..i18n import CITIES, LANGS, I18n
+from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
 from ..usage import remaining, usage
 from ..validators import (
@@ -239,7 +239,7 @@ class WebApp:
     async def catalog(self, request: web.Request) -> web.Response:
         q = request.query
         city = q.get("city", "")
-        if city and city not in CITIES:
+        if city and city not in CITIES + LEGACY_CITIES:
             city = ""
         try:
             offset = max(0, int(q.get("offset", "0")))

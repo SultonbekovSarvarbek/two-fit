@@ -3,7 +3,7 @@ import re
 import string
 from pathlib import Path
 
-from two_fit.i18n import CITIES, I18n
+from two_fit.i18n import CITIES, LEGACY_CITIES, I18n
 
 i18n = I18n()
 RU, UZ = i18n.texts["ru"], i18n.texts["uz"]
@@ -69,7 +69,7 @@ def test_every_key_used_in_code_exists():
         "err.": ["bad_tariff", "bad_date_format", "bad_date_past", "bad_date_far", "bad_price", "bad_desc_long",
                  "bad_contacts", "bad_photo", "bad_name", "bad_phone", "bad_start_future", "bad_start_order", "bad_monthly", "bad_payments_left"],
         "app.unit.": ["m", "d"],
-        "city.": list(CITIES),
+        "city.": list(CITIES + LEGACY_CITIES),
     }.items():
         for item in items:
             assert prefix + item in RU, prefix + item

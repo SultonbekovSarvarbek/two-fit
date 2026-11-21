@@ -431,3 +431,20 @@ async def test_editing_after_a_rate_change_asks_to_accept_again(h, api):
     assert own["percent"] == 5 and own["rate_changed"] is True
     await api.call("PUT", f"/api/listings/{lid}", SELLER, draft())
     assert (await h.repo.get_listing(lid))["commission_percent"] == 10  # saving accepts today's rate
+
+
+async def test_only_1fit_cities_are_offered(h, api):
+    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+    assert boot["cities"] == ["tashkent", "samarkand", "bukhara", "andijan", "namangan", "fergana", "navoi"]
+    status, data = await api.call("POST", "/api/listings", SELLER, draft(city="nukus"))
+    assert status == 400 and data["field"] == "city"
+    # A listing made in Nukus before the change still shows and filters.
+    lid = await h.repo.create_listing(SELLER, "ru", {**repo_draft(), "city": "nukus"})
+    await h.repo.approve(lid, ADMIN)
+    status, cat = await api.call("GET", "/api/catalog?city=nukus", BUYER)
+    assert status == 200 and [i["id"] for i in cat["items"]] == [lid]
+
+
+def repo_draft():
+    return {"tariff": "", "end_date": END, "price": 2_000_000, "commission_accepted_price": 2_000_000,
+            "seller_name": "A", "seller_phone": "", "paid_in_full": True, "kind": "membership"}
