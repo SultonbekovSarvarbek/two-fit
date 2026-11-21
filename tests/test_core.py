@@ -7,7 +7,9 @@ from two_fit.money import calc_commission, fmt_money
 from two_fit.repo import LS, RS, Repo, RepoError, today_local
 from two_fit.validators import (
     ValidationError, contains_contacts, normalize_phone, parse_description, parse_end_date, parse_price,
+    parse_start_date,
 )
+from two_fit.usage import usage
 
 FUTURE = (today_local() + timedelta(days=200)).isoformat()
 
@@ -68,6 +70,40 @@ def test_date_parsing():
         parse_end_date("31.02.2027", today)
     with pytest.raises(ValidationError, match="bad_date_far"):
         parse_end_date("01.01.2035", today)
+
+
+def test_start_date_parsing():
+    today, end = date(2026, 10, 28), date(2027, 3, 1)
+    assert parse_start_date("01.03.2026", today, end) == date(2026, 3, 1)
+    assert parse_start_date("28.10.2026", today, end) == today
+    with pytest.raises(ValidationError, match="bad_start_future"):
+        parse_start_date("29.10.2026", today, end)
+    with pytest.raises(ValidationError, match="bad_start_order"):
+        parse_start_date("01.10.2026", today, date(2026, 10, 1))
+    with pytest.raises(ValidationError, match="bad_date_far"):
+        parse_start_date("01.01.2019", today, end)
+
+
+def test_usage():
+    today = date(2026, 10, 28)
+    # a 12-month membership activated 8 months ago
+    assert usage("2026-02-28", "2027-02-28", today) == {"used": 8, "total": 12, "unit": "m", "pct": 66}
+    assert usage("2026-10-28", "2027-10-28", today)["used"] == 0
+    assert usage(None, "2027-02-28", today) is None
+    assert usage("2027-03-01", "2027-02-28", today) is None  # inconsistent dates show nothing
+    # short memberships are counted in days
+    assert usage("2026-10-18", "2026-11-17", today) == {"used": 10, "total": 30, "unit": "d", "pct": 33}
+    # used never exceeds the total, even past the end date
+    u = usage("2025-01-01", "2026-01-01", today)
+    assert u["used"] == u["total"] == 12 and u["pct"] == 100
+
+
+async def test_start_date_stored_and_checked(repo):
+    start = (today_local() - timedelta(days=30)).isoformat()
+    lid = await repo.create_listing(1, "ru", draft(start_date=start))
+    assert (await repo.get_listing(lid))["start_date"] == start
+    with pytest.raises(RepoError, match="bad_start"):
+        await repo.create_listing(1, "ru", draft(start_date=FUTURE))
 
 
 def test_phone():
@@ -273,20 +309,22 @@ async def test_data_survives_restart(tmp_path):
     await r2.close()
 
 
-async def test_old_database_gets_price_negotiable_column(tmp_path):
+async def test_old_database_gets_new_columns(tmp_path):
     import aiosqlite
 
     from two_fit.repo import SCHEMA
     path = tmp_path / "old.db"
-    old_schema = "\n".join(l for l in SCHEMA.splitlines() if "price_negotiable" not in l)
+    old_schema = "\n".join(l for l in SCHEMA.splitlines() if "price_negotiable" not in l and "start_date" not in l)
     async with aiosqlite.connect(path) as db:  # a database from before the column existed
         await db.executescript(old_schema)
     r = Repo(path, 10)
     await r.connect()
     try:
         await r.touch_user(1, "u", "U")
-        lid = await r.create_listing(1, "ru", draft(price_negotiable=True))
-        assert (await r.get_listing(lid))["price_negotiable"] == 1
+        start = today_local().isoformat()
+        lid = await r.create_listing(1, "ru", draft(price_negotiable=True, start_date=start))
+        listing = await r.get_listing(lid)
+        assert listing["price_negotiable"] == 1 and listing["start_date"] == start
         await r.close()
         await r.connect()  # running the migration twice is harmless
     finally:

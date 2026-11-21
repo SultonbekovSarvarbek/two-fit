@@ -142,6 +142,15 @@ p { margin: 0; }
 .hero .label { font-size: 13.5px; font-weight: 500; opacity: 0.66; }
 .hero .value { font: 700 28px/1.15 var(--display); letter-spacing: -0.03em; margin-top: 4px; }
 .hero .value small { font: 500 15px var(--body); letter-spacing: 0; opacity: 0.66; }
+/* used share of the membership: «Использовано 8 из 12 мес.» + a bar */
+.usage { margin-top: 8px; }
+.usage .cap { font-size: 12.5px; color: var(--hint); margin-bottom: 5px; }
+.usage .track { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.usage .fill { height: 100%; border-radius: inherit; background: var(--mark); }
+.card.usage { margin-top: 0; padding: 15px 16px 17px; }
+.card.usage .cap { font-size: 14.5px; color: var(--text); margin-bottom: 9px; }
+.card.usage .cap b { font-weight: 600; }
+.card.usage .track { height: 8px; }
 .rows > div { display: flex; justify-content: space-between; gap: 16px; padding: 13px 16px; }
 .rows > div + div { border-top: 1px solid var(--line); }
 .rows .k { color: var(--hint); flex: none; }
@@ -403,13 +412,24 @@ function listingRow(l, onclick, extra) {
     h("div", { class: "main" },
       h("div", { class: "title" }, l.tariff),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
-      extra || priceBadge(l)),
+      usageBar(l), extra || priceBadge(l)),
     h("div", { class: "price num" }, money(l.price), h("small", null, T("app.sum"))));
 }
 function cheapestFlag() {
   const flag = h("span", { class: "flag" }, T("app.badge.cheapest"));
   flag.insertAdjacentHTML("afterbegin", '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>');
   return flag;
+}
+function usageBar(l, big) {
+  const u = l.usage;
+  if (!u) return null;
+  const unit = T("app.unit." + u.unit);
+  const used = T("app.usage", { used: u.used, total: u.total, unit });
+  const left = T("app.usage_left", { left: u.total - u.used, unit });
+  return h("div", { class: big ? "card usage" : "usage" },
+    h("div", { class: "cap num" }, big ? h("b", null, used) : used, " · " + left),
+    h("div", { class: "track", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(u.pct), "aria-label": used },
+      h("div", { class: "fill", style: "width:" + Math.max(u.pct, 2) + "%" })));
 }
 const priceBadge = (l) => h("span", { class: "badge ptype " + (l.price_negotiable ? "deal" : "fixed") },
   T(l.price_negotiable ? "app.badge.negotiable" : "app.badge.fixed"));
@@ -453,6 +473,7 @@ function publicRows(l) {
   return h("div", { class: "card rows" },
     h("div", null, h("span", { class: "k" }, T("app.f.city")), h("span", { class: "v" }, city(l.city))),
     h("div", null, h("span", { class: "k" }, T("app.f.tariff")), h("span", { class: "v" }, l.tariff)),
+    l.start_date ? h("div", null, h("span", { class: "k" }, T("app.f.start")), h("span", { class: "v num" }, dmy(l.start_date))) : null,
     h("div", null, h("span", { class: "k" }, T("app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))));
 }
 function priceHero(l) {
@@ -477,7 +498,7 @@ function listingView(view, rev) {
   return [
     h("h1", null, T("app.listing", { id: l.id })),
     h("div", { class: "stack" },
-      priceHero(l), publicRows(l),
+      priceHero(l), usageBar(l, true), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
       action,
       h("p", { class: "note" }, T("app.buy.free") + " " + T("app.op_hint", { id: l.id }))),
@@ -540,9 +561,9 @@ function buyView(view) {
 
 function newDraft(l) {
   return l
-    ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
+    ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
         name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: true }  // shot: an earlier screenshot stays attached
-    : { id: null, city: "", tariff: "", end_date: "", price: "", negotiable: false, description: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
+    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
 
 function sellForm(d, onDone) {
@@ -557,6 +578,8 @@ function sellForm(d, onDone) {
   const tariff = bind(h("input", { type: "text", maxLength: L.tariff_max, placeholder: T("app.sell.tariff_ph"), value: d.tariff }), "tariff");
   const date = bind(h("input", { type: "date", min: L.date_min, max: L.date_max, value: d.end_date }), "end_date");
   date.addEventListener("change", () => { d.end_date = date.value; });
+  const start = bind(h("input", { type: "date", min: L.start_min, max: L.start_max, value: d.start_date }), "start_date");
+  start.addEventListener("change", () => { d.start_date = start.value; });
 
   const calc = h("div", { class: "card rows", hidden: true });
   const accept = h("input", { type: "checkbox", checked: d.accept });
@@ -596,6 +619,7 @@ function sellForm(d, onDone) {
     city: field(T("app.f.city"), citySel),
     tariff: field(T("app.f.tariff"), tariff),
     end_date: field(T("app.f.date"), date),
+    start_date: field(T("app.f.start"), start, { hint: T("app.sell.start_hint") }),
     price: field(T("app.f.price"), price, { hint: T("app.sell.price_hint") }),
     description: field(T("app.f.desc"), desc, { extra: counter }),
     name: field(T("app.sell.name"), name),
@@ -608,7 +632,7 @@ function sellForm(d, onDone) {
     if (submit.disabled) return;
     if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
     submit.disabled = true;
-    const body = { city: d.city, tariff: d.tariff, end_date: d.end_date, price: d.price, price_negotiable: d.negotiable,
+    const body = { city: d.city, tariff: d.tariff, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
                    description: d.description, name: d.name, phone: d.phone, accepted_price: Number(d.price), screenshot: d.shot };
     try {
       const res = d.id ? await api("PUT", "listings/" + d.id, body) : await api("POST", "listings", body);
@@ -620,7 +644,7 @@ function sellForm(d, onDone) {
       showFieldError(fields, err);
     }
   } },
-    h("div", { class: "card" }, fields.city, fields.tariff, fields.end_date),
+    h("div", { class: "card" }, fields.city, fields.tariff, fields.end_date, fields.start_date),
     h("div", { class: "card" }, fields.price, negotiableRow), calc,
     h("div", { class: "card" }, fields.description),
     h("h2", null, T("app.sell.contacts")),
@@ -687,7 +711,7 @@ function mineView(view) {
         h("div", { style: "font-weight:600" }, T("status." + l.status)),
         l.reject_reason ? h("div", { style: "margin-top:4px" }, T("app.my.reason", { reason: l.reject_reason })) : null,
         l.sale_reported ? h("div", { style: "margin-top:4px" }, T("app.my.sale_reported")) : null),
-      publicRows(l),
+      usageBar(l, true), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
       h("div", { class: "card rows" },
         h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(l.price) + " " + sumLabel(l))),

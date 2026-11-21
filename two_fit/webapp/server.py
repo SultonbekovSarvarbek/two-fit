@@ -26,9 +26,11 @@ from ..bot.ui import btn, esc, kb
 from ..config import Config
 from ..i18n import CITIES, LANGS, I18n
 from ..repo import LS, Repo, RepoError, today_local
+from ..usage import usage
 from ..validators import (
     DESC_MAX,
     MAX_YEARS_AHEAD,
+    MAX_YEARS_BACK,
     NAME_MAX,
     PRICE_MAX,
     PRICE_MIN,
@@ -37,6 +39,7 @@ from ..validators import (
     normalize_phone,
     parse_description,
     parse_end_date,
+    parse_start_date,
     parse_name,
     parse_price,
     parse_tariff,
@@ -65,8 +68,9 @@ class ApiError(Exception):
 # ------------------------------------------------------------------ serializers
 def public_view(listing: dict[str, Any]) -> dict[str, Any]:
     """Only what a buyer may see — never the seller's identity, contacts or screenshot."""
-    view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "price", "description")}
+    view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
+    view["usage"] = usage(listing["start_date"], listing["end_date"], today_local())
     return view
 
 
@@ -200,6 +204,7 @@ class WebApp:
                 "price_min": PRICE_MIN, "price_max": PRICE_MAX, "desc_max": DESC_MAX,
                 "tariff_max": TARIFF_MAX, "name_max": NAME_MAX,
                 "date_min": today.isoformat(), "date_max": f"{today.year + MAX_YEARS_AHEAD}-12-31",
+                "start_min": f"{today.year - MAX_YEARS_BACK}-01-01", "start_max": today.isoformat(),
             },
         }
 
@@ -279,6 +284,16 @@ class WebApp:
             raise ValidationError("bad_date_format") from None
         return parse_end_date(parsed.strftime("%d.%m.%Y"), today).isoformat()
 
+    @staticmethod
+    def _iso_start(value: str | None, today: date, end_iso: str) -> str | None:
+        if not value:
+            return None
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError:
+            raise ValidationError("bad_date_format") from None
+        return parse_start_date(parsed.strftime("%d.%m.%Y"), today, date.fromisoformat(end_iso)).isoformat()
+
     def _draft(self, ctx: Ctx, body: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
         city = body.get("city")
         if city not in CITIES:
@@ -296,6 +311,8 @@ class WebApp:
             "seller_name": self._field(ctx, "name", parse_name, body.get("name")),
             "seller_phone": self._field(ctx, "phone", normalize_phone, body.get("phone")),
         }
+        draft["start_date"] = self._field(ctx, "start_date", self._iso_start, body.get("start_date") or "",
+                                          today_local(), draft["end_date"])
         # The seller ticks the consent for one exact price; a different price means no consent.
         if body.get("accepted_price") != draft["price"]:
             raise ApiError(400, "commission_not_accepted", ctx.t("app.err.accept"), "accept")

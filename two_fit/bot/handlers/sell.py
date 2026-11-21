@@ -1,6 +1,8 @@
 """«Sell a membership» wizard. Also used to edit an existing listing (re-moderation)."""
 from __future__ import annotations
 
+from datetime import date
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -15,6 +17,7 @@ from ...validators import (
     parse_end_date,
     parse_name,
     parse_price,
+    parse_start_date,
     parse_tariff,
 )
 from ..callbacks import AdmCb, SellCb
@@ -30,6 +33,7 @@ class SellForm(StatesGroup):
     city = State()
     tariff = State()
     date = State()
+    start = State()
     price = State()
     desc = State()
     photo = State()
@@ -39,10 +43,10 @@ class SellForm(StatesGroup):
     choose = State()
 
 
-STEPS = ["city", "tariff", "date", "price", "desc", "photo", "name", "phone"]
+STEPS = ["city", "tariff", "date", "start", "price", "desc", "photo", "name", "phone"]
 STATE_OF = {s: getattr(SellForm, s) for s in STEPS}
 FIELDS = {  # field in «Change» menu -> first step to ask
-    "city": "city", "tariff": "tariff", "date": "date", "price": "price",
+    "city": "city", "tariff": "tariff", "date": "date", "start": "start", "price": "price",
     "desc": "desc", "photo": "photo", "contacts": "name",
 }
 
@@ -69,6 +73,9 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
         await message.answer(ctx.t("sell.ask_tariff"), reply_markup=_nav(ctx, step))
     elif step == "date":
         await message.answer(ctx.t("sell.ask_date"), reply_markup=_nav(ctx, step))
+    elif step == "start":
+        skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
+        await message.answer(ctx.t("sell.ask_start"), reply_markup=_nav(ctx, step, skip))
     elif step == "price":
         await message.answer(ctx.t("sell.ask_price"), reply_markup=_nav(ctx, step))
     elif step == "desc":
@@ -157,7 +164,7 @@ async def menu_sell(message: Message, state: FSMContext, ctx: Ctx) -> None:
 async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dict) -> None:
     """Called from «My listings»: open the preview of an existing listing for editing."""
     draft = {k: listing[k] for k in (
-        "city", "tariff", "end_date", "price", "price_negotiable", "description", "screenshot_file_id",
+        "city", "tariff", "end_date", "start_date", "price", "price_negotiable", "description", "screenshot_file_id",
         "seller_name", "seller_phone",
     )}
     await state.clear()
@@ -173,7 +180,7 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
 
 
 # ------------------------------------------------------------------ navigation
-_WIZARD = (SellForm.city, SellForm.tariff, SellForm.date, SellForm.price, SellForm.desc, SellForm.photo,
+_WIZARD = (SellForm.city, SellForm.tariff, SellForm.date, SellForm.start, SellForm.price, SellForm.desc, SellForm.photo,
            SellForm.name, SellForm.phone, SellForm.preview, SellForm.choose)
 
 
@@ -254,7 +261,31 @@ async def on_tariff(message: Message, state: FSMContext, ctx: Ctx) -> None:
 
 @router.message(SellForm.date)
 async def on_date(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    data = await state.get_data()
+    start = (data.get("draft") or {}).get("start_date")
+    if start and message.text:
+        # A start date that is no longer before the new end date would show nonsense — drop it.
+        try:
+            if start >= parse_end_date(message.text, today_local()).isoformat():
+                await draft_update(state, start_date=None)
+        except ValidationError:
+            pass
     await _text_step(message, state, ctx, "date", lambda t: parse_end_date(t, today_local()).isoformat(), "end_date")
+
+
+@router.message(SellForm.start)
+async def on_start(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    end = date.fromisoformat((await state.get_data())["draft"]["end_date"])
+    await _text_step(message, state, ctx, "start",
+                     lambda t: parse_start_date(t, today_local(), end).isoformat(), "start_date")
+
+
+@router.callback_query(SellForm.start, SellCb.filter(F.action == "skip"))
+async def on_start_skip(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await draft_update(state, start_date=None)
+    await advance(call.message, state, ctx, "start")
 
 
 @router.message(SellForm.price)

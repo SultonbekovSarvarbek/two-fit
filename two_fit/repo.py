@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS listings (
     city                      TEXT NOT NULL,
     tariff                    TEXT NOT NULL,
     end_date                  TEXT NOT NULL,      -- YYYY-MM-DD
+    start_date                TEXT,               -- YYYY-MM-DD, optional: when the membership was activated
     price                     INTEGER NOT NULL CHECK (price > 0),
     price_negotiable          INTEGER NOT NULL DEFAULT 0,  -- 1: price is open to negotiation
     description               TEXT NOT NULL DEFAULT '',
@@ -186,6 +187,8 @@ class Repo:
             columns = {r[1] for r in await cur.fetchall()}
         if "price_negotiable" not in columns:
             await self.db.execute("ALTER TABLE listings ADD COLUMN price_negotiable INTEGER NOT NULL DEFAULT 0")
+        if "start_date" not in columns:
+            await self.db.execute("ALTER TABLE listings ADD COLUMN start_date TEXT")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -281,18 +284,21 @@ class Repo:
         if draft.get("commission_accepted_price") != draft["price"]:
             # The seller must have accepted the commission for exactly this price.
             raise RepoError("commission_not_accepted")
+        if draft.get("start_date") and draft["start_date"] >= draft["end_date"]:
+            raise RepoError("bad_start")
 
     async def create_listing(self, seller_id: int, lang: str, draft: dict[str, Any]) -> int:
         self._check_draft(draft)
         async with self.tx():
             ts = now_iso()
             cur = await self.db.execute(
-                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, price, price_negotiable,
+                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, start_date, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
                        status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    seller_id, lang, draft["city"], draft["tariff"], draft["end_date"], draft["price"],
+                    seller_id, lang, draft["city"], draft["tariff"], draft["end_date"], draft.get("start_date"),
+                    draft["price"],
                     int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, ts, ts,
@@ -311,12 +317,12 @@ class Repo:
             if listing["status"] not in LS.SELLER_EDITABLE:
                 raise RepoError("bad_status")
             await self.db.execute(
-                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, price=?, price_negotiable=?, description=?,
+                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, start_date=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?,
                        status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
                    WHERE id=?""",
                 (
-                    lang, draft["city"], draft["tariff"], draft["end_date"], draft["price"],
+                    lang, draft["city"], draft["tariff"], draft["end_date"], draft.get("start_date"), draft["price"],
                     int(bool(draft.get("price_negotiable"))), draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, now_iso(), listing_id,
                 ),

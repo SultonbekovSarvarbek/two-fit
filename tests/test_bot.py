@@ -9,6 +9,7 @@ from .harness import Harness, alerts, texts
 
 SELLER, BUYER, STRANGER, ADMIN = 1, 2, 3, 900
 END = (today_local() + timedelta(days=200)).strftime("%d.%m.%Y")
+START = (today_local() - timedelta(days=165)).strftime("%d.%m.%Y")  # 365 days in all: 5 of 12 months used
 
 
 @pytest.fixture
@@ -30,6 +31,7 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     await h.click(uid, "sl:city:tashkent")
     await h.send(uid, "Йиллик безлимит")
     await h.send(uid, END)
+    await h.send(uid, START)
     calc = await h.send(uid, price)
     assert "200 000" in texts(calc) and "1 800 000" in texts(calc)
     await h.send(uid, "Қолган 7 ой, зал яқин")
@@ -40,6 +42,7 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     assert "Two Fit комиссияси (10%): 200 000" in pt and "Сизга қолади: <b>1 800 000" in pt
     assert "Фақат администратор кўради" in pt and "+998901112233" in pt
     assert "келишилади" not in pt
+    assert "📊 Ишлатилди: 5 / 12 ой · қолди: 7 ой\n▰▰▰▰▱▱▱▱▱▱" in pt
     end = today_local() + timedelta(days=200)
     month = "январь феврал март апрел май июн июл август сентябр октябр ноябр декабр".split()[end.month - 1]
     assert f"Амал қилиш муддати: {end.day} {month} {end.year} гача" in pt  # words, not 07.05.2027
@@ -163,12 +166,15 @@ async def test_wizard_navigation_and_validation(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:city:samarkand")
-    assert "Шаг 1/7" in texts(await h.click(SELLER, "sl:back:"))  # back to city
+    assert "Шаг 1/8" in texts(await h.click(SELLER, "sl:back:"))  # back to city
     await h.click(SELLER, "sl:city:samarkand")
     assert "от 2 до 60" in texts(await h.send(SELLER, "x"))
     await h.send(SELLER, "Годовой")
     assert "прошла" in texts(await h.send(SELLER, "01.01.2020"))
     await h.send(SELLER, END)
+    tomorrow = (today_local() + timedelta(days=1)).strftime("%d.%m.%Y")
+    assert "ещё не наступила" in texts(await h.send(SELLER, tomorrow))
+    await h.click(SELLER, "sl:skip:")  # the start date is optional
     assert "цифрами" in texts(await h.send(SELLER, "дорого"))
     await h.send(SELLER, "3000000")
     assert "контакты" in texts(await h.send(SELLER, "пишите @alisher_fit"))
@@ -252,8 +258,8 @@ async def test_restart_keeps_language_data_and_wizard(tmp_path):
     await h1.stop()
 
     h2 = await Harness(db).start()  # "restart"
-    nxt = await h2.send(SELLER, END)  # wizard continues at the price step, in Uzbek
-    assert "4/7-қадам" in texts(nxt)
+    nxt = await h2.send(SELLER, END)  # wizard continues at the start-date step, in Uzbek
+    assert "4/8-қадам" in texts(nxt)
     welcome = await h2.send(SELLER, "/start")
     assert "Тилни танланг" not in texts(welcome) and "Эълон жойлаш — бепул" in texts(welcome)
     await h2.stop()

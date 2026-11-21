@@ -10,6 +10,7 @@ DESC_MAX = 500
 TARIFF_MIN, TARIFF_MAX = 2, 60
 NAME_MIN, NAME_MAX = 2, 60
 MAX_YEARS_AHEAD = 3
+MAX_YEARS_BACK = 5
 
 
 class ValidationError(ValueError):
@@ -41,7 +42,7 @@ def parse_name(text: str | None) -> str:
 _DATE_RE = re.compile(r"^\s*(\d{1,2})[./\-\s](\d{1,2})[./\-\s](\d{2}|\d{4})\s*$")
 
 
-def parse_end_date(text: str | None, today: date) -> date:
+def _parse_dmy(text: str | None) -> date:
     m = _DATE_RE.match(text or "")
     if not m:
         raise ValidationError("bad_date_format")
@@ -49,12 +50,28 @@ def parse_end_date(text: str | None, today: date) -> date:
     if year < 100:
         year += 2000
     try:
-        value = date(year, month, day)
+        return date(year, month, day)
     except ValueError:
         raise ValidationError("bad_date_format") from None
+
+
+def parse_end_date(text: str | None, today: date) -> date:
+    value = _parse_dmy(text)
     if value < today:
         raise ValidationError("bad_date_past")
     if value.year > today.year + MAX_YEARS_AHEAD:
+        raise ValidationError("bad_date_far")
+    return value
+
+
+def parse_start_date(text: str | None, today: date, end: date) -> date:
+    """When the membership was activated: optional, lets buyers see how much of it is used."""
+    value = _parse_dmy(text)
+    if value > today:
+        raise ValidationError("bad_start_future")
+    if value >= end:
+        raise ValidationError("bad_start_order")
+    if value.year < today.year - MAX_YEARS_BACK:
         raise ValidationError("bad_date_far")
     return value
 

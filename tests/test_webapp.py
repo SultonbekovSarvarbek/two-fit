@@ -153,6 +153,8 @@ async def test_create_listing_goes_to_moderation_and_notifies_admin(h, api):
     ({"tariff": "x"}, "bad_tariff", "tariff"),
     ({"end_date": "2020-01-01"}, "bad_date_past", "end_date"),
     ({"end_date": "31.05.2027"}, "bad_date_format", "end_date"),
+    ({"start_date": "2999-01-01"}, "bad_start_future", "start_date"),
+    ({"start_date": "01.01.2026"}, "bad_date_format", "start_date"),
     ({"price": "100", "accepted_price": 100}, "bad_price", "price"),
     ({"price": 2000000.5}, "bad_price", "price"),
     ({"description": "пишите @alisher_fit"}, "bad_contacts", "description"),
@@ -197,7 +199,9 @@ async def test_catalog_shows_only_public_fields(h, api):
     assert status == 200 and cat["total"] == 2
     assert {c["code"]: c["count"] for c in cat["cities"]} == {"tashkent": 1, "samarkand": 1}
     for item in cat["items"]:
-        assert set(item) == {"id", "city", "tariff", "end_date", "price", "price_negotiable", "description"}
+        assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
+                             "description"}
+        assert item["start_date"] is None and item["usage"] is None
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]
 
@@ -316,3 +320,19 @@ async def test_chat_keeps_only_the_open_app_button(h):
     buttons = [b for m in markups if hasattr(m, "inline_keyboard") for row in m.inline_keyboard for b in row]
     assert len(buttons) == 4 and all(b.web_app and b.web_app.url == "https://app.example.com/" for b in buttons)
     assert "Выберите действие в меню" not in h.texts_to(SELLER)
+
+
+async def test_start_date_shows_usage(h, api):
+    from datetime import timedelta
+
+    from two_fit.repo import today_local
+    start = (today_local() - timedelta(days=165)).isoformat()
+    end = (today_local() + timedelta(days=200)).isoformat()
+    lid = await publish(h, api, start_date=start, end_date=end)
+    status, card = await api.call("GET", f"/api/listings/{lid}", BUYER)
+    assert status == 200
+    assert card["listing"]["start_date"] == start
+    assert card["listing"]["usage"] == {"used": 5, "total": 12, "unit": "m", "pct": 45}
+    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+    assert boot["limits"]["start_max"] == today_local().isoformat()
+    assert {"app.usage", "app.usage_left", "app.unit.m", "app.unit.d", "app.f.start"} <= set(boot["texts"])
