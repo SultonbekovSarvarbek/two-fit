@@ -11,10 +11,12 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from ...i18n import CITIES
 from ...money import fmt_money
 from ...repo import LK, LS, RepoError, today_local
+from ...usage import payments_guess
 from ...validators import (
     TARIFF_PLANS,
     ValidationError,
     check_plan_end,
+    check_plan_span,
     normalize_phone,
     parse_description,
     parse_end_date,
@@ -171,7 +173,10 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
     elif step == "monthly":
         await message.answer(ctx.t("sell.ask_monthly"), reply_markup=_nav(ctx, step))
     elif step == "left":
-        await message.answer(ctx.t("sell.ask_left"), reply_markup=_nav(ctx, step))
+        # Usually one payment per month until the end date: offer that number, a tap instead of typing.
+        guess = payments_guess(data["draft"]["end_date"], today_local())
+        offer = [[btn(ctx.t("sell.left_ok", n=guess), SellCb(action="leftok", value=str(guess)))]]
+        await message.answer(ctx.t("sell.ask_left_guess", n=guess), reply_markup=_nav(ctx, step, offer))
     elif step == "freeze":
         options = [[btn(ctx.t("sell.freeze_no"), SellCb(action="freeze", value="no")),
                     btn(ctx.t("sell.freeze_yes"), SellCb(action="freeze", value="yes"))]]
@@ -448,12 +453,16 @@ async def on_date(message: Message, state: FSMContext, ctx: Ctx) -> None:
     data = await state.get_data()
     start = (data.get("draft") or {}).get("start_date")
     if start and message.text:
-        # A start date that is no longer before the new end date would show nonsense — drop it.
+        # A start date that no longer fits the new end date (after it, or not the tariff's length away)
+        # would show nonsense — drop it; it is optional and can be given again.
         try:
-            if start >= parse_end_date(message.text, today_local()).isoformat():
+            new_end = parse_end_date(message.text, today_local())
+            check_plan_span(date.fromisoformat(start), new_end, (data.get("draft") or {}).get("tariff_days"))
+            if start >= new_end.isoformat():
                 await draft_update(state, start_date=None)
-        except ValidationError:
-            pass
+        except ValidationError as e:
+            if e.code == "bad_dates_for_plan":
+                await draft_update(state, start_date=None)
     plan_days = (data.get("draft") or {}).get("tariff_days")
 
     def parse(text: str) -> str:
@@ -466,9 +475,15 @@ async def on_date(message: Message, state: FSMContext, ctx: Ctx) -> None:
 
 @router.message(SellForm.start)
 async def on_start(message: Message, state: FSMContext, ctx: Ctx) -> None:
-    end = date.fromisoformat((await state.get_data())["draft"]["end_date"])
-    await _text_step(message, state, ctx, "start",
-                     lambda t: parse_start_date(t, today_local(), end).isoformat(), "start_date")
+    draft = (await state.get_data())["draft"]
+    end = date.fromisoformat(draft["end_date"])
+
+    def parse(text: str) -> str:
+        start = parse_start_date(text, today_local(), end)
+        check_plan_span(start, end, draft.get("tariff_days"))  # 15 months between the dates on a 12-month tariff
+        return start.isoformat()
+
+    await _text_step(message, state, ctx, "start", parse, "start_date")
 
 
 @router.callback_query(SellForm.start, SellCb.filter(F.action == "skip"))
@@ -503,6 +518,20 @@ async def on_monthly(message: Message, state: FSMContext, ctx: Ctx) -> None:
 @router.message(SellForm.left)
 async def on_left(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await _text_step(message, state, ctx, "left", parse_payments_left, "payments_left")
+
+
+@router.callback_query(SellForm.left, SellCb.filter(F.action == "leftok"))
+async def on_left_ok(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
+    """«✅ Yes, 7»: the suggested number of payments is right."""
+    try:
+        n = parse_payments_left(callback_data.value)
+    except ValidationError:
+        await call.answer(ctx.t("common.stale"), show_alert=True)
+        return
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await draft_update(state, payments_left=n)
+    await advance(call.message, state, ctx, "left")
 
 
 @router.callback_query(SellForm.freeze, SellCb.filter(F.action == "freeze"))
@@ -610,10 +639,12 @@ async def on_plan(call: CallbackQuery, callback_data: SellCb, state: FSMContext,
         await call.answer(ctx.t("common.stale"), show_alert=True)
         return
     days = int(callback_data.value)
-    end = (await state.get_data()).get("draft", {}).get("end_date")
+    draft = (await state.get_data()).get("draft", {})
+    end, start = draft.get("end_date"), draft.get("start_date")
     if end:
         try:
             check_plan_end(date.fromisoformat(end), today_local(), days)
+            check_plan_span(date.fromisoformat(start) if start else None, date.fromisoformat(end), days)
         except ValidationError as e:
             await call.answer(ctx.t(f"err.{e.code}"), show_alert=True)
             return
@@ -780,6 +811,8 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
         await ask(call.message, state, ctx, "price")
         return
     draft["commission_accepted_price"] = draft.get("price")
+    # An automatic price keeps following the days left after listing (Repo.reprice, every day).
+    draft["price_auto"] = bool(data.get("auto_price")) and draft.get("kind") != LK.PROMO
     try:
         if data.get("mode") == "edit":
             listing_id = data["listing_id"]

@@ -14,7 +14,8 @@ from typing import Any
 import aiosqlite
 
 from .money import calc_commission
-from .pricing import normalize_prices
+from .pricing import advise, normalize_prices
+from .usage import DAYS_PER_MONTH
 from .validators import TARIFF_PLANS
 
 # Uzbekistan has no DST: UTC+5 all year round.
@@ -104,6 +105,8 @@ CREATE TABLE IF NOT EXISTS listings (
     payments_left             INTEGER,            -- installment: how many of those payments are left
     tariff_days               INTEGER,            -- membership: the 1Fit tariff, 180 / 365 / 730 days; NULL on old listings
     freeze_days               INTEGER,            -- membership: unused freeze days (0 = none); NULL on old listings
+    price_auto                INTEGER NOT NULL DEFAULT 0,  -- 1: the recommended price, lowered every day as days pass
+    payments_as_of            TEXT,               -- YYYY-MM-DD: the day payments_left was true; one fewer each month after
     description               TEXT NOT NULL DEFAULT '',
     screenshot_file_id        TEXT,
     seller_name               TEXT NOT NULL,
@@ -236,6 +239,10 @@ class Repo:
         for column in ("tariff_days", "freeze_days"):
             if column not in columns:
                 await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} INTEGER")
+        if "price_auto" not in columns:
+            await self.db.execute("ALTER TABLE listings ADD COLUMN price_auto INTEGER NOT NULL DEFAULT 0")
+        if "payments_as_of" not in columns:
+            await self.db.execute("ALTER TABLE listings ADD COLUMN payments_as_of TEXT")
         if "commission_percent" not in columns:
             # Listings made before the rate was stored were accepted at 10% (membership) and 30% (promo code).
             await self.db.execute("ALTER TABLE listings ADD COLUMN commission_percent INTEGER")
@@ -377,6 +384,14 @@ class Repo:
                 *Repo._payment(draft))
 
     @staticmethod
+    def _auto_fields(draft: dict[str, Any]) -> tuple[int, str | None]:
+        """price_auto, payments_as_of: whether the price follows the days, and when payments_left was stated."""
+        membership = draft.get("kind") != LK.PROMO
+        auto = int(bool(draft.get("price_auto")) and membership)
+        installment = membership and draft.get("paid_in_full") in (False, 0) and draft.get("paid_in_full") is not None
+        return auto, (today_local().isoformat() if installment and draft.get("payments_left") else None)
+
+    @staticmethod
     def _payment(draft: dict[str, Any]) -> tuple[int, int | None, int | None]:
         if draft["paid_in_full"]:
             return 1, None, None
@@ -391,14 +406,14 @@ class Repo:
                        start_date,
                        paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
-                       commission_percent, status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       commission_percent, price_auto, payments_as_of, status, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
-                    self.percent_for(draft.get("kind")), LS.PENDING, ts, ts,
+                    self.percent_for(draft.get("kind")), *self._auto_fields(draft), LS.PENDING, ts, ts,
                 ),
             )
             listing_id = cur.lastrowid
@@ -417,14 +432,14 @@ class Repo:
                 """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, tariff_days=?, freeze_days=?, start_date=?,
                        paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?, commission_percent=?,
-                       status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
+                       price_auto=?, payments_as_of=?, status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
                    WHERE id=?""",
                 (
                     lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft), draft["price"],
                     int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
-                    self.percent_for(draft.get("kind")), LS.PENDING, now_iso(), listing_id,
+                    self.percent_for(draft.get("kind")), *self._auto_fields(draft), LS.PENDING, now_iso(), listing_id,
                 ),
             )
             await self._log(listing_id, seller_id, "edited", price=draft["price"])
@@ -830,6 +845,49 @@ class Repo:
                 (key, json.dumps(value, ensure_ascii=False), now_iso()),
             )
 
+    async def reprice(self, today: date | None = None) -> int:
+        """Every day: one installment fewer for each month the seller has paid since listing, and the automatic
+        price lowered to what the days still left are worth. Listings in a deal (reserved) keep their price.
+        Returns how many prices changed."""
+        today = today or today_local()
+        rows = await self._all(
+            "SELECT * FROM listings WHERE status IN (?,?) AND kind=? AND end_date>=?",
+            (LS.PENDING, LS.APPROVED, LK.MEMBERSHIP, today.isoformat()),
+        )
+        changed = 0
+        for listing in rows:
+            async with self.tx():
+                listing = await self.get_listing(listing["id"])  # fresh: a deal may have started meanwhile
+                if listing["status"] not in (LS.PENDING, LS.APPROVED):
+                    continue
+                left, as_of = listing["payments_left"], listing["payments_as_of"]
+                if listing["paid_in_full"] == 0 and left and as_of:
+                    paid = int((today - date.fromisoformat(as_of)).days // DAYS_PER_MONTH)
+                    if paid > 0:
+                        left = max(0, left - paid)
+                        as_of = (date.fromisoformat(as_of) + timedelta(days=round(paid * DAYS_PER_MONTH))).isoformat()
+                        if left:
+                            await self.db.execute("UPDATE listings SET payments_left=?, payments_as_of=? WHERE id=?",
+                                                  (left, as_of, listing["id"]))
+                        else:  # all paid off: from now on it is a fully paid membership
+                            await self.db.execute(
+                                "UPDATE listings SET paid_in_full=1, monthly_payment=NULL, payments_left=NULL, "
+                                "payments_as_of=NULL WHERE id=?", (listing["id"],))
+                        listing = await self.get_listing(listing["id"])
+                if not (listing["price_auto"] and listing["tariff_days"]):
+                    continue
+                installment = listing["paid_in_full"] == 0
+                a = advise(listing["end_date"], today, self.fit_prices,
+                           listing["monthly_payment"] if installment else None,
+                           listing["payments_left"] if installment else None, plan_days=listing["tariff_days"])
+                if a and a.recommended != listing["price"]:
+                    await self.db.execute(
+                        "UPDATE listings SET price=?, commission_accepted_price=? WHERE id=?",
+                        (a.recommended, a.recommended, listing["id"]))
+                    await self._log(listing["id"], None, "repriced", old=listing["price"], new=a.recommended)
+                    changed += 1
+        return changed
+
     async def set_fit_prices(self, prices: dict[int, int], admin_id: int | None = None) -> None:
         clean = normalize_prices(prices)
         async with self.tx():
@@ -840,6 +898,7 @@ class Repo:
             )
             await self._log(None, admin_id, "fit_prices", prices={str(k): v for k, v in clean.items()})
         self.fit_prices = clean
+        await self.reprice()  # automatic prices follow 1Fit's
 
     async def log_price_check(self, status: str, prices: dict[int, int] | None = None,
                               full: dict[int, int] | None = None, error: str | None = None) -> None:

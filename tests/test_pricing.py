@@ -399,3 +399,131 @@ async def test_bot_catalog_button_shows_the_saving(h):
     assert saving_mark(ctx, {**base, "price": a.recommended}) == f" · 🔥 −{a.saving(a.recommended)}%"
     assert saving_mark(ctx, {**base, "price": 300_000}) == ""            # suspicious: no boasting
     assert saving_mark(ctx, {**base, "price": round(a.fit_value)}) == ""  # no saving at all
+
+
+def test_start_and_end_must_fit_the_tariff():
+    """The screenshot: a 12-month tariff from 01.10.2026 to 31.12.2027 is 15 months — a mistake."""
+    from two_fit.validators import ValidationError, check_plan_span
+    with pytest.raises(ValidationError) as e:
+        check_plan_span(date(2026, 10, 1), date(2027, 12, 31), 365)
+    assert e.value.code == "bad_dates_for_plan"
+    check_plan_span(date(2026, 10, 1), date(2027, 10, 1), 365)   # exactly 12 months
+    check_plan_span(date(2026, 10, 1), date(2027, 12, 20), 365)  # 12 months + 80 days of freezes
+    check_plan_span(date(2026, 10, 10), date(2027, 10, 1), 365)  # activated a few days after buying
+    with pytest.raises(ValidationError):
+        check_plan_span(date(2026, 10, 1), date(2027, 4, 1), 365)  # 6 months on a 12-month tariff
+    check_plan_span(None, date(2027, 12, 31), 365)  # no start date: nothing to compare
+
+
+async def test_api_refuses_dates_that_do_not_fit_the_tariff(h, api):  # noqa: F811
+    end = (today_local() + timedelta(days=200)).isoformat()
+    wrong = (today_local() - timedelta(days=260)).isoformat()  # 460 days between the dates, 12-month tariff
+    status, err = await api.call("POST", "/api/listings", SELLER, draft(end_date=end, start_date=wrong))
+    assert (status, err["error"], err["field"]) == (400, "bad_dates_for_plan", "start_date")
+    right = (today_local() - timedelta(days=165)).isoformat()
+    status, _ = await api.call("POST", "/api/listings", SELLER, draft(end_date=end, start_date=right))
+    assert status == 201
+
+
+async def test_bot_refuses_a_start_date_that_does_not_fit_the_tariff(h):
+    await h.send(SELLER, "/start")
+    await h.click(SELLER, "lang:ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:city:tashkent")
+    await h.click(SELLER, "sl:plan:365")
+    await h.send(SELLER, (today_local() + timedelta(days=200)).strftime("%d.%m.%Y"))
+    wrong = texts(await h.send(SELLER, (today_local() - timedelta(days=260)).strftime("%d.%m.%Y")))
+    assert "Даты не совпадают с тарифом" in wrong
+    ok = texts(await h.send(SELLER, (today_local() - timedelta(days=165)).strftime("%d.%m.%Y")))
+    assert "Как оплачен абонемент" in ok
+
+
+def test_payments_left_are_guessed_from_the_end_date():
+    from two_fit.usage import payments_guess
+    assert payments_guess(end_in(200), TODAY) == 7   # 200 days: about 7 monthly payments
+    assert payments_guess(end_in(10), TODAY) == 1    # never 0
+    assert payments_guess(end_in(5000), TODAY) == 60  # never above the limit
+
+
+async def test_bot_offers_the_number_of_payments(h):
+    await h.send(SELLER, "/start")
+    await h.click(SELLER, "lang:ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:city:tashkent")
+    await h.click(SELLER, "sl:plan:365")
+    await h.send(SELLER, (today_local() + timedelta(days=200)).strftime("%d.%m.%Y"))
+    await h.click(SELLER, "sl:skip:")
+    await h.click(SELLER, "sl:pay:installment")
+    ask = texts(await h.send(SELLER, "500 000"))
+    assert "По дате окончания — <b>7</b>" in ask and h.button(SELLER, "Да, 7") == "sl:leftok:7"
+    nxt = texts(await h.click(SELLER, "sl:leftok:7"))
+    assert "заморозки" in nxt  # one tap, straight to the next question
+    data = await h.dp.storage.get_data(key=_key(h))
+    assert data["draft"]["payments_left"] == 7
+
+
+# ------------------------------------------------------------------ the price follows the days left
+async def _auto_listing(repo, today_end_days=300, **over):
+    end = (today_local() + timedelta(days=today_end_days)).isoformat()
+    a = advise(end, today_local(), repo.fit_prices, plan_days=365)
+    d = {"city": "tashkent", "kind": "membership", "tariff_days": 365, "end_date": end, "paid_in_full": True,
+         "price": a.recommended, "commission_accepted_price": a.recommended, "seller_name": "A",
+         "price_auto": True, **over}
+    lid = await repo.create_listing(SELLER, "ru", d)
+    return lid, end
+
+
+async def test_reprice_lowers_the_automatic_price_as_days_pass(h):
+    await h.repo.touch_user(SELLER, "s", "S")
+    lid, end = await _auto_listing(h.repo)
+    first = (await h.repo.get_listing(lid))["price"]
+    assert await h.repo.reprice(today_local()) == 0  # same day: nothing to change
+    month_later = today_local() + timedelta(days=30)
+    assert await h.repo.reprice(month_later) == 1
+    listing = await h.repo.get_listing(lid)
+    expected = advise(end, month_later, h.repo.fit_prices, plan_days=365).recommended
+    assert listing["price"] == listing["commission_accepted_price"] == expected < first
+
+
+async def test_reprice_leaves_typed_prices_and_deals_alone(h):
+    await h.repo.touch_user(SELLER, "s", "S")
+    await h.repo.touch_user(2, "b", "B")
+    typed, _ = await _auto_listing(h.repo, price_auto=False)
+    in_deal, _ = await _auto_listing(h.repo)
+    await h.repo.approve(in_deal, ADMIN)
+    rid = await h.repo.create_request(in_deal, 2, "Бобур", "+998930000002")
+    await h.repo.reserve(rid, ADMIN)
+    before = {i: (await h.repo.get_listing(i))["price"] for i in (typed, in_deal)}
+    await h.repo.reprice(today_local() + timedelta(days=60))
+    assert {i: (await h.repo.get_listing(i))["price"] for i in (typed, in_deal)} == before
+
+
+async def test_reprice_counts_down_the_installments(h):
+    await h.repo.touch_user(SELLER, "s", "S")
+    lid, _ = await _auto_listing(h.repo, paid_in_full=False, monthly_payment=500_000, payments_left=3)
+    assert (await h.repo.get_listing(lid))["payments_as_of"] == today_local().isoformat()
+    await h.repo.reprice(today_local() + timedelta(days=31))  # the seller paid one more month
+    assert (await h.repo.get_listing(lid))["payments_left"] == 2
+    await h.repo.reprice(today_local() + timedelta(days=100))  # all paid off
+    listing = await h.repo.get_listing(lid)
+    assert (listing["paid_in_full"], listing["payments_left"], listing["monthly_payment"]) == (1, None, None)
+
+
+async def test_listings_get_the_automatic_flag(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from two_fit.i18n import I18n
+    from two_fit.webapp.server import create_webapp
+
+    from .test_webapp import END
+    h = await Harness(tmp_path / "flag.db", auto_price=True).start()
+    try:
+        async with TestClient(TestServer(create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"]))) as client:
+            a = advise(END, today_local(), plan_days=365)
+            _, made = await Api(client, h.cfg.bot_token).call("POST", "/api/listings", SELLER,
+                                                               draft(accepted_price=a.recommended))
+            assert (await h.repo.get_listing(made["id"]))["price_auto"] == 1
+    finally:
+        await h.stop()

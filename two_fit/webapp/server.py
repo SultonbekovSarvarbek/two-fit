@@ -41,6 +41,7 @@ from ..validators import (
     TARIFF_PLANS,
     ValidationError,
     check_plan_end,
+    check_plan_span,
     normalize_phone,
     parse_description,
     parse_end_date,
@@ -366,7 +367,9 @@ class WebApp:
         a = price_advice(ctx, draft)
         if a and self.cfg.auto_price:
             # The price is the recommended one, worked out here: whatever the app sent is not trusted.
+            # It then keeps following the days left: Repo.reprice lowers it every day.
             draft["price"] = a.recommended
+            draft["price_auto"] = True
         else:
             draft["price"] = self._field(ctx, "price", parse_price, raw_price)
         if a and not self.cfg.auto_price and a.too_high(draft["price"]):
@@ -425,6 +428,11 @@ class WebApp:
             raise ApiError(400, e.code, ctx.t(f"err.{e.code}"), "end_date") from None
         draft["start_date"] = self._field(ctx, "start_date", self._iso_start, body.get("start_date") or "",
                                           today_local(), draft["end_date"])
+        try:  # 15 months between the dates on a 12-month tariff: a wrong date or a wrong tariff
+            check_plan_span(date.fromisoformat(draft["start_date"]) if draft["start_date"] else None,
+                            date.fromisoformat(draft["end_date"]), plan)
+        except ValidationError as e:
+            raise ApiError(400, e.code, ctx.t(f"err.{e.code}"), "start_date") from None
         paid = body.get("paid_in_full")
         if not isinstance(paid, bool):
             raise ApiError(400, "bad_payment", ctx.t("app.err.payment"), "payment")

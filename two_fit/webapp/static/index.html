@@ -627,7 +627,7 @@ function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
         kind: l.kind, code: l.promo_code || "", plan: l.tariff_days || null,
-        freeze: !!l.freeze_days, freezeDays: l.freeze_days ? String(l.freeze_days) : "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "",
+        freeze: !!l.freeze_days, freezeDays: l.freeze_days ? String(l.freeze_days) : "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "", leftTyped: !!l.payments_left,
         name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: !l.rate_changed }  // shot: an earlier screenshot stays attached
     : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
@@ -643,7 +643,7 @@ function sellForm(d, onDone, onKind) {
   citySel.addEventListener("change", () => { d.city = citySel.value; setError(fields.city, ""); });
   const tariff = bind(h("input", { type: "text", maxLength: L.tariff_max, placeholder: T("app.sell.what_promo_ph"), value: d.tariff }), "tariff");
   const date = bind(h("input", { type: "date", min: L.date_min, max: L.date_max, value: d.end_date }), "end_date");
-  date.addEventListener("change", () => { d.end_date = date.value; loadAdvice(); });
+  date.addEventListener("change", () => { d.end_date = date.value; guessLeft(); loadAdvice(); });
   const start = bind(h("input", { type: "date", min: L.start_min, max: L.start_max, value: d.start_date }), "start_date");
   start.addEventListener("change", () => { d.start_date = start.value; });
 
@@ -694,7 +694,15 @@ function sellForm(d, onDone, onKind) {
   const monthly = digitsInput("monthly", 9, "500 000");
   const left = digitsInput("left", 2, "9");
   monthly.addEventListener("input", () => loadAdvice());
-  left.addEventListener("input", () => loadAdvice());
+  left.addEventListener("input", () => { d.leftTyped = true; loadAdvice(); });
+  // Usually one payment per month until the end date: filled in, the seller only corrects it.
+  const guessLeft = () => {
+    if (d.leftTyped || !d.end_date) return;
+    const days = (new Date(d.end_date) - new Date(new Date().toISOString().slice(0, 10))) / 864e5;
+    const n = Math.min(60, Math.max(1, Math.round(days / 30.4375)));
+    if (!(n > 0)) return;
+    d.left = String(n); left.value = d.left;
+  };
 
   const calc = h("div", { class: "card rows", hidden: true });
   const accept = h("input", { type: "checkbox", checked: d.accept });
@@ -803,7 +811,7 @@ function sellForm(d, onDone, onKind) {
     start_date: field(T("app.f.start"), start, { hint: T("app.sell.start_hint") }),
     payment: payWrap,
     monthly_payment: field(T("app.f.monthly"), monthly),
-    payments_left: field(T("app.f.left"), left),
+    payments_left: field(T("app.f.left"), left, { hint: T("app.sell.left_hint") }),
     freeze_days: field(T("app.f.freeze_days"), freezeDays),
     price: field(T("app.f.price"), price, { hint: T("app.sell.price_hint") }),
     description: field(T("app.f.desc"), desc, { extra: counter }),
@@ -818,6 +826,7 @@ function sellForm(d, onDone, onKind) {
   const drawPay = () => {
     paySeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.paid === (b.dataset.full === "true"))));
     fields.monthly_payment.hidden = fields.payments_left.hidden = d.paid !== false;
+    if (d.paid === false) guessLeft();
     priceHint.textContent = T(d.kind === "promo" ? "app.sell.price_hint_promo"
       : d.paid === false ? "app.sell.price_hint_installment" : "app.sell.price_hint");
   };

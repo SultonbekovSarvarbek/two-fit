@@ -91,6 +91,19 @@ def parse_price(text: str | None) -> int:
     return value
 
 
+PLAN_SHORT_DAYS = 15  # the start date may be a little after the purchase: a slightly shorter span is fine
+
+
+def check_plan_span(start: date | None, end: date, plan_days: int | None) -> None:
+    """From the start date to the end date there must be about as long as the tariff: a 12-month tariff
+    from 01.10.2026 cannot end on 31.12.2027 (15 months). Freezes may add up to PLAN_FREEZE_DAYS."""
+    if not (start and plan_days):
+        return
+    span = (end - start).days
+    if not plan_days - PLAN_SHORT_DAYS <= span <= plan_days + PLAN_FREEZE_DAYS:
+        raise ValidationError("bad_dates_for_plan")
+
+
 def check_plan_end(end: date, today: date, plan_days: int | None) -> None:
     """A 12-month tariff cannot have 20 months left: either the date or the tariff is wrong."""
     if plan_days and (end - today).days > plan_days + PLAN_FREEZE_DAYS:

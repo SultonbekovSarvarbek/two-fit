@@ -18,8 +18,8 @@ from aiogram.types import (
 
 from .config import Config, load_config
 from .i18n import I18n
-from .price_watch import PriceWatcher
-from .repo import Repo
+from .price_watch import PriceWatcher, next_run
+from .repo import TZ, Repo
 from .storage import SQLiteStorage
 from .bot.handlers import build_router
 from .bot.middlewares import ContextMiddleware
@@ -66,6 +66,22 @@ async def setup_bot_profile(bot: Bot, i18n: I18n, cfg: Config) -> None:
         log.warning("could not set bot commands: %s", e)
 
 
+REPRICE_AT = [(0, 10)]  # every day just after midnight in Tashkent
+
+
+async def reprice_daily(repo: Repo) -> None:
+    """Automatic prices follow the days left: a membership listed today is worth less in a month."""
+    from datetime import datetime
+    while True:
+        try:
+            changed = await repo.reprice()
+            log.info("repriced %d listings", changed)
+        except Exception:  # noqa: BLE001 — a failed run must not stop tomorrow's
+            log.exception("reprice failed")
+        at = next_run(datetime.now(TZ), REPRICE_AT)
+        await asyncio.sleep(max(60.0, (at - datetime.now(TZ)).total_seconds()))
+
+
 async def run() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg = load_config()
@@ -88,6 +104,7 @@ async def run() -> None:
         web_runner = await start_webapp(repo, i18n, cfg, bot, dp["notifier"])
     elif cfg.webapp_url:
         log.warning("WEBAPP_URL must start with https:// — the Mini App is off")
+    reprice_task = asyncio.create_task(reprice_daily(repo))  # runs once now, then every night
     watch_task = None
     if cfg.fit_watch:
         watch_task = asyncio.create_task(dp["price_watcher"].run())
@@ -95,6 +112,7 @@ async def run() -> None:
         log.info("Two Fit bot started")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        reprice_task.cancel()
         if watch_task is not None:
             watch_task.cancel()
         if web_runner is not None:
