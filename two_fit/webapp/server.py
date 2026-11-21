@@ -25,7 +25,7 @@ from ..bot.notify import Notifier
 from ..bot.ui import btn, esc, kb
 from ..config import Config
 from ..i18n import CITIES, LANGS, I18n
-from ..repo import LS, Repo, RepoError, today_local
+from ..repo import LK, LS, Repo, RepoError, today_local
 from ..usage import usage
 from ..validators import (
     DESC_MAX,
@@ -45,6 +45,7 @@ from ..validators import (
     parse_start_date,
     parse_name,
     parse_price,
+    parse_promo_code,
     parse_tariff,
 )
 
@@ -73,6 +74,7 @@ def public_view(listing: dict[str, Any]) -> dict[str, Any]:
     """Only what a buyer may see — never the seller's identity, contacts or screenshot."""
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
+    view["kind"] = listing["kind"]  # the promo code itself is never public
     view["usage"] = usage(listing["start_date"], listing["end_date"], today_local())
     paid = listing["paid_in_full"]
     view["paid_in_full"] = None if paid is None else bool(paid)  # None: listed before the question existed
@@ -84,9 +86,11 @@ def public_view(listing: dict[str, Any]) -> dict[str, Any]:
 def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
     status = listing["status"]
     expired = status == LS.APPROVED and Repo.is_expired(listing)
-    c = ctx.commission(listing["price"])
+    c = ctx.commission(listing["price"], listing["kind"])
     return {
         **public_view(listing),
+        "promo_code": listing["promo_code"],
+        "percent": c.percent,
         "status": "expired" if expired else status,
         "reject_reason": listing["reject_reason"] if status == LS.REJECTED else None,
         "sale_reported": bool(listing["sale_reported_at"]) and status in (LS.APPROVED, LS.RESERVED),
@@ -203,7 +207,8 @@ class WebApp:
             "lang": ctx.lang,
             "langs": [{"code": code, "name": self.i18n.t(code, f"lang.{code}")} for code in LANGS],
             "texts": texts,
-            "vars": {"operator": self.cfg.operator, "percent": self.cfg.commission_percent},
+            "vars": {"operator": self.cfg.operator, "percent": self.cfg.commission_percent,
+                     "promo_percent": self.cfg.promo_commission_percent},
             "support_url": self.cfg.support_url,
             "cities": list(CITIES),
             "user": {"name": ctx.user.get("contact_name") or "", "phone": ctx.user.get("contact_phone") or ""},
@@ -321,15 +326,15 @@ class WebApp:
             "seller_name": self._field(ctx, "name", parse_name, body.get("name")),
             "seller_phone": self._field(ctx, "phone", normalize_phone, body.get("phone")),
         }
-        draft["start_date"] = self._field(ctx, "start_date", self._iso_start, body.get("start_date") or "",
-                                          today_local(), draft["end_date"])
-        paid = body.get("paid_in_full")
-        if not isinstance(paid, bool):
-            raise ApiError(400, "bad_payment", ctx.t("app.err.payment"), "payment")
-        draft["paid_in_full"] = paid
-        if not paid:
-            draft["monthly_payment"] = self._field(ctx, "monthly_payment", parse_monthly, number("monthly_payment"))
-            draft["payments_left"] = self._field(ctx, "payments_left", parse_payments_left, number("payments_left"))
+        # What is sold stays as it was listed; a new listing must say it.
+        kind = existing["kind"] if existing else body.get("kind")
+        if kind not in LK.ALL:
+            raise ApiError(400, "bad_kind", ctx.t("app.err.kind"), "kind")
+        draft["kind"] = kind
+        if kind == LK.PROMO:
+            draft["promo_code"] = self._field(ctx, "promo_code", parse_promo_code, body.get("promo_code"))
+        else:
+            self._membership_fields(ctx, body, draft, number)
         # The seller ticks the consent for one exact price; a different price means no consent.
         if body.get("accepted_price") != draft["price"]:
             raise ApiError(400, "commission_not_accepted", ctx.t("app.err.accept"), "accept")
@@ -346,6 +351,18 @@ class WebApp:
         else:
             draft["screenshot_file_id"] = None
         return draft
+
+    def _membership_fields(self, ctx: Ctx, body: dict[str, Any], draft: dict[str, Any], number) -> None:
+        """Start date and how the membership is paid: fully or in installments."""
+        draft["start_date"] = self._field(ctx, "start_date", self._iso_start, body.get("start_date") or "",
+                                          today_local(), draft["end_date"])
+        paid = body.get("paid_in_full")
+        if not isinstance(paid, bool):
+            raise ApiError(400, "bad_payment", ctx.t("app.err.payment"), "payment")
+        draft["paid_in_full"] = paid
+        if not paid:
+            draft["monthly_payment"] = self._field(ctx, "monthly_payment", parse_monthly, number("monthly_payment"))
+            draft["payments_left"] = self._field(ctx, "payments_left", parse_payments_left, number("payments_left"))
 
     async def screenshot(self, request: web.Request) -> web.Response:
         """The picture goes to the seller's own chat with the bot; Telegram then stores it for the admin."""

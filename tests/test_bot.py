@@ -28,6 +28,7 @@ async def choose_lang(h, uid, lang):
 async def create_listing(h, uid=SELLER, price="2 000 000"):
     """Seller (in Uzbek) walks the whole wizard. Returns the calls of the final «send»."""
     await h.send(uid, "➕ Абонемент сотиш")
+    await h.click(uid, "sl:kind:membership")
     await h.click(uid, "sl:city:tashkent")
     await h.send(uid, "Йиллик безлимит")
     await h.send(uid, END)
@@ -166,6 +167,7 @@ async def test_full_happy_path(h):
 async def test_wizard_navigation_and_validation(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:city:samarkand")
     assert "Шаг 1/9" in texts(await h.click(SELLER, "sl:back:"))  # back to city
     await h.click(SELLER, "sl:city:samarkand")
@@ -255,6 +257,7 @@ async def test_restart_keeps_language_data_and_wizard(tmp_path):
     h1 = await Harness(db).start()
     await choose_lang(h1, SELLER, "uz")
     await h1.send(SELLER, "➕ Абонемент сотиш")
+    await h1.click(SELLER, "sl:kind:membership")
     await h1.click(SELLER, "sl:city:tashkent")
     await h1.send(SELLER, "Йиллик")
     await h1.stop()
@@ -276,6 +279,7 @@ async def test_bot_ignores_group_chats(h):
 async def test_installment_wizard_and_card(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:city:tashkent")
     await h.send(SELLER, "Безлимит 12 месяцев")
     await h.send(SELLER, END)
@@ -307,6 +311,7 @@ async def test_installment_wizard_and_card(h):
 async def test_fully_paid_skips_installment_questions(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:city:tashkent")
     await h.send(SELLER, "Годовой")
     await h.send(SELLER, END)
@@ -314,3 +319,30 @@ async def test_fully_paid_skips_installment_questions(h):
     ask_price = texts(await h.click(SELLER, "sl:pay:full"))
     assert "Шаг 6/9" in ask_price and "больше он ничего не доплачивает" in ask_price
     assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:back:"))  # back skips the installment steps
+
+
+async def test_promo_code_wizard(h):
+    await choose_lang(h, SELLER, "ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:promo")
+    await h.click(SELLER, "sl:city:tashkent")
+    await h.send(SELLER, "Безлимит на 1 месяц")
+    ask_code = texts(await h.send(SELLER, END))
+    assert "Шаг 4/8" in ask_code and "Сам промокод" in ask_code  # no start date, no payment question
+    assert "одно слово" in texts(await h.send(SELLER, "два слова"))
+    ask_price = texts(await h.send(SELLER, "FIT-2026"))
+    assert "Цена промокода" in ask_price and "30%" in ask_price
+    calc = texts(await h.send(SELLER, "100 000"))
+    assert "Комиссия Two Fit (30%): 30\xa0000" in calc and "70\xa0000" in calc
+    assert "Шаг 5/8" in texts(await h.click(SELLER, "sl:back:"))  # from the description back to the price
+    await h.send(SELLER, "100 000")
+    await h.click(SELLER, "sl:skip:")
+    await h.click(SELLER, "sl:skip:")
+    await h.send(SELLER, "Алишер")
+    preview = texts(await h.send(SELLER, contact="+998901112233"))
+    assert "🎁 промокод 1Fit" in preview and "Что даёт: Безлимит на 1 месяц" in preview
+    assert "Промокод: <code>FIT-2026</code>" in preview  # in the private block
+    await h.click(SELLER, "sl:accept:")
+    await h.click(SELLER, "sl:send:")
+    listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
+    assert (listing["kind"], listing["promo_code"], listing["price"]) == ("promo", "FIT-2026", 100_000)

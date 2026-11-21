@@ -34,13 +34,18 @@ class Ctx:
         defaults = {
             "operator": self.cfg.operator,
             "percent": self.cfg.commission_percent,
+            "promo_percent": self.cfg.promo_commission_percent,
             "min": fmt_money(PRICE_MIN),
             "max": fmt_money(PRICE_MAX),
         }
         return self.i18n.t(self.lang, key, **{**defaults, **kwargs})
 
-    def commission(self, price: int) -> Commission:
-        return calc_commission(price, self.cfg.commission_percent)
+    def percent(self, kind: str | None = None) -> int:
+        """10% for a membership, 30% for a promo code."""
+        return self.cfg.promo_commission_percent if kind == "promo" else self.cfg.commission_percent
+
+    def commission(self, price: int, kind: str | None = None) -> Commission:
+        return calc_commission(price, self.percent(kind))
 
     def for_lang(self, lang: str | None, user_id: int = 0) -> "Ctx":
         """Same context, but speaking another user's language (for notifications)."""

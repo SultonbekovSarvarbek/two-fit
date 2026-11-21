@@ -355,3 +355,26 @@ async def test_payment_kind_is_required(repo):
     lid = await repo.create_listing(1, "ru", draft(monthly_payment=500_000, payments_left=9))  # fully paid
     listing = await repo.get_listing(lid)
     assert (listing["paid_in_full"], listing["monthly_payment"], listing["payments_left"]) == (1, None, None)
+
+
+async def test_promo_code_takes_30_percent(repo):
+    with pytest.raises(RepoError):
+        await repo.create_listing(1, "ru", draft(kind="promo", paid_in_full=None))  # the code is required
+    lid = await repo.create_listing(1, "ru", draft(price=100_000, kind="promo", promo_code="FIT-2026",
+                                                   paid_in_full=None, start_date=FUTURE))
+    listing = await repo.get_listing(lid)
+    assert (listing["kind"], listing["promo_code"], listing["start_date"]) == ("promo", "FIT-2026", None)
+    await repo.approve(lid, 99)
+    rid = await repo.create_request(lid, 2, "Бобур", "+998930000002")
+    await repo.reserve(rid, 99)
+    await repo.set_final_price(lid, 99, 100_000)
+    deal, _ = await repo.close_deal(lid, 99)
+    assert (deal["commission_percent"], deal["commission_amount"], deal["seller_amount"]) == (30, 30_000, 70_000)
+
+
+def test_promo_code_parsing():
+    from two_fit.validators import parse_promo_code
+    assert parse_promo_code("  FIT-2026 ") == "FIT-2026"
+    for bad in ("", "ab", "two words", "x" * 41, "код!"):
+        with pytest.raises(ValidationError):
+            parse_promo_code(bad)

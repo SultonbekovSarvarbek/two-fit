@@ -36,8 +36,10 @@ def card(ctx: Ctx, listing: dict, page: int) -> tuple[str, InlineKeyboardMarkup]
     parts = [
         ctx.t("my.status_line", status=status_label(ctx, listing)),
         listing_public(ctx, listing, listing["id"]),
-        commission_block(ctx, listing["price"]),
+        commission_block(ctx, listing["price"], listing["kind"]),
     ]
+    if listing["promo_code"]:
+        parts.append(ctx.t("my.promo_code", code=esc(listing["promo_code"])))
     if listing["status"] == LS.REJECTED and listing["reject_reason"]:
         parts.append(ctx.t("my.reason", reason=esc(listing["reject_reason"])))
     if listing["sale_reported_at"] and listing["status"] in (LS.APPROVED, LS.RESERVED):

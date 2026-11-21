@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from ...i18n import CITIES
 from ...money import fmt_money
-from ...repo import LS, RepoError, today_local
+from ...repo import LK, LS, RepoError, today_local
 from ...validators import (
     ValidationError,
     normalize_phone,
@@ -20,6 +20,7 @@ from ...validators import (
     parse_name,
     parse_payments_left,
     parse_price,
+    parse_promo_code,
     parse_start_date,
     parse_tariff,
 )
@@ -33,6 +34,7 @@ router = Router(name="sell")
 
 
 class SellForm(StatesGroup):
+    kind = State()
     city = State()
     tariff = State()
     date = State()
@@ -40,6 +42,7 @@ class SellForm(StatesGroup):
     payment = State()
     monthly = State()
     left = State()
+    code = State()
     price = State()
     desc = State()
     photo = State()
@@ -49,56 +52,95 @@ class SellForm(StatesGroup):
     choose = State()
 
 
-STEPS = ["city", "tariff", "date", "start", "payment", "monthly", "left", "price", "desc", "photo", "name", "phone"]
+STEPS = ["kind", "city", "tariff", "date", "start", "payment", "monthly", "left", "code", "price", "desc", "photo",
+         "name", "phone"]
 INSTALLMENT_STEPS = ("monthly", "left")  # asked only when the membership is paid in installments
+MEMBERSHIP_ONLY = ("start", "payment", "monthly", "left")
+PROMO_ONLY = ("code",)
 STATE_OF = {s: getattr(SellForm, s) for s in STEPS}
-FIELDS = {  # field in «Change» menu -> first step to ask
-    "city": "city", "tariff": "tariff", "date": "date", "start": "start", "payment": "payment", "price": "price",
-    "desc": "desc", "photo": "photo", "contacts": "name",
+# Steps shown as «Step n/total»; the installment answers and the phone belong to the step before them.
+NUMBERED = {
+    LK.MEMBERSHIP: ["city", "tariff", "date", "start", "payment", "price", "desc", "photo", "name"],
+    LK.PROMO: ["city", "tariff", "date", "code", "price", "desc", "photo", "name"],
 }
+FIELDS = {  # field in «Change» menu -> first step to ask
+    "city": "city", "tariff": "tariff", "date": "date", "start": "start", "payment": "payment", "code": "code",
+    "price": "price", "desc": "desc", "photo": "photo", "contacts": "name",
+}
+# A promo code is described in its own words: what it gives, until when to activate it, what it costs.
+PROMO_TEXTS = {"tariff": "sell.ask_tariff_promo", "date": "sell.ask_date_promo", "price": "sell.ask_price_promo"}
+
+
+def _kind(data: dict) -> str:
+    return (data.get("draft") or {}).get("kind") or LK.MEMBERSHIP
 
 
 def _installment(data: dict) -> bool:
-    return (data.get("draft") or {}).get("paid_in_full") is False
+    return _kind(data) == LK.MEMBERSHIP and (data.get("draft") or {}).get("paid_in_full") is False
+
+
+def _skipped(data: dict, step: str) -> bool:
+    if _kind(data) == LK.PROMO:
+        return step in MEMBERSHIP_ONLY
+    return step in PROMO_ONLY or (step in INSTALLMENT_STEPS and not _installment(data))
 
 
 def _neighbour(data: dict, step: str, delta: int) -> str:
-    """Next (+1) or previous (-1) step, skipping the installment questions for a fully paid membership."""
+    """Next (+1) or previous (-1) step, skipping what does not apply to this promo code or membership."""
     i = STEPS.index(step) + delta
-    while STEPS[i] in INSTALLMENT_STEPS and not _installment(data):
+    while _skipped(data, STEPS[i]):
         i += delta
     return STEPS[i]
+
+
+def _fields(data: dict) -> list[str]:
+    """What the «Change» menu offers for this promo code or membership."""
+    return [f for f, step in FIELDS.items() if not _skipped(data, step)]
 
 
 # ------------------------------------------------------------------ prompts
 def _nav(ctx: Ctx, step: str, extra: list | None = None, single: bool = False) -> InlineKeyboardMarkup:
     rows = list(extra or [])
     bottom = []
-    if step != "city" or single:
+    if step != "kind" or single:
         bottom.append(btn(ctx.t("common.back"), SellCb(action="back")))
     bottom.append(btn(ctx.t("common.cancel"), SellCb(action="cancel")))
     rows.append(bottom)
     return kb(*rows)
 
 
+def step_title(ctx: Ctx, data: dict, step: str) -> str:
+    numbered = NUMBERED[_kind(data)]
+    if step not in numbered:
+        return ""
+    return ctx.t("sell.step", n=numbered.index(step) + 1, total=len(numbered))
+
+
+def prompt(ctx: Ctx, data: dict, step: str) -> str:
+    key = PROMO_TEXTS.get(step) if _kind(data) == LK.PROMO else None
+    return step_title(ctx, data, step) + ctx.t(key or f"sell.ask_{step}", percent=ctx.percent(_kind(data)))
+
+
 async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
     await state.set_state(STATE_OF[step])
     data = await state.get_data()
-    if step == "city":
+    if step == "kind":
+        options = [[btn(ctx.t("sell.kind_membership"), SellCb(action="kind", value=LK.MEMBERSHIP))],
+                   [btn(ctx.t("sell.kind_promo"), SellCb(action="kind", value=LK.PROMO))]]
+        await message.answer(ctx.t("sell.ask_kind"), reply_markup=_nav(ctx, step, options))
+    elif step == "city":
         names = [btn(ctx.i18n.city(ctx.lang, c), SellCb(action="city", value=c)) for c in CITIES]
         rows = [names[i:i + 2] for i in range(0, len(names), 2)]
-        await message.answer(ctx.t("sell.ask_city"), reply_markup=_nav(ctx, step, rows, bool(data.get("single"))))
-    elif step == "tariff":
-        await message.answer(ctx.t("sell.ask_tariff"), reply_markup=_nav(ctx, step))
-    elif step == "date":
-        await message.answer(ctx.t("sell.ask_date"), reply_markup=_nav(ctx, step))
+        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, rows))
+    elif step in ("tariff", "date", "code"):
+        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step))
     elif step == "start":
         skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
-        await message.answer(ctx.t("sell.ask_start"), reply_markup=_nav(ctx, step, skip))
+        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
     elif step == "payment":
         options = [[btn(ctx.t("sell.pay_full"), SellCb(action="pay", value="full"))],
                    [btn(ctx.t("sell.pay_installment"), SellCb(action="pay", value="installment"))]]
-        await message.answer(ctx.t("sell.ask_payment"), reply_markup=_nav(ctx, step, options))
+        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, options))
     elif step == "monthly":
         await message.answer(ctx.t("sell.ask_monthly"), reply_markup=_nav(ctx, step))
     elif step == "left":
@@ -106,23 +148,24 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
     elif step == "price":
         d = data.get("draft") or {}
         if _installment(data):
-            text = ctx.t("sell.ask_price_installment", monthly=fmt_money(d["monthly_payment"]), left=d["payments_left"])
+            text = step_title(ctx, data, step) + ctx.t(
+                "sell.ask_price_installment", monthly=fmt_money(d["monthly_payment"]), left=d["payments_left"])
         else:
-            text = ctx.t("sell.ask_price")
+            text = prompt(ctx, data, step)
         await message.answer(text, reply_markup=_nav(ctx, step))
     elif step == "desc":
         skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
-        await message.answer(ctx.t("sell.ask_desc"), reply_markup=_nav(ctx, step, skip))
+        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
     elif step == "photo":
         skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
-        await message.answer(ctx.t("sell.ask_photo"), reply_markup=_nav(ctx, step, skip))
+        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
     elif step == "name":
         extra = []
         u = ctx.user
         if u.get("contact_name") and u.get("contact_phone"):
             extra = [[btn(ctx.t("sell.use_saved", name=u["contact_name"], phone=u["contact_phone"]),
                           SellCb(action="saved"))]]
-        await message.answer(ctx.t("sell.ask_name"), reply_markup=_nav(ctx, step, extra))
+        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, extra))
     elif step == "phone":
         await message.answer(ctx.t("sell.ask_phone"), reply_markup=phone_kb(ctx))
 
@@ -151,18 +194,21 @@ async def draft_update(state: FSMContext, **values) -> dict:
 # ------------------------------------------------------------------ preview
 def preview_text(ctx: Ctx, data: dict) -> str:
     d = data["draft"]
+    private = ctx.t(
+        "sell.private_block",
+        name=esc(d["seller_name"]),
+        phone=esc(d["seller_phone"]),
+        photo=ctx.t("sell.photo_yes" if d.get("screenshot_file_id") else "sell.photo_no"),
+    )
+    if d.get("promo_code"):
+        private += ctx.t("sell.private_code", code=esc(d["promo_code"]))
     parts = [
         ctx.t("sell.preview_title"),
         listing_public(ctx, d, data.get("listing_id") or "—"),
         "—",
-        commission_block(ctx, d["price"]),
+        commission_block(ctx, d["price"], _kind(data)),
         ctx.t("commission.note"),
-        ctx.t(
-            "sell.private_block",
-            name=esc(d["seller_name"]),
-            phone=esc(d["seller_phone"]),
-            photo=ctx.t("sell.photo_yes" if d.get("screenshot_file_id") else "sell.photo_no"),
-        ),
+        private,
     ]
     return "\n\n".join(parts)
 
@@ -170,9 +216,10 @@ def preview_text(ctx: Ctx, data: dict) -> str:
 def preview_kb(ctx: Ctx, data: dict) -> InlineKeyboardMarkup:
     accepted = bool(data.get("accepted"))
     negotiable = bool((data.get("draft") or {}).get("price_negotiable"))
+    percent = ctx.percent(_kind(data))
     return kb(
         [btn(ctx.t("sell.negotiable_on" if negotiable else "sell.negotiable_off"), SellCb(action="negotiable"))],
-        [btn(ctx.t("sell.accept_on" if accepted else "sell.accept_off"), SellCb(action="accept"))],
+        [btn(ctx.t("sell.accept_on" if accepted else "sell.accept_off", percent=percent), SellCb(action="accept"))],
         [btn(ctx.t("sell.send"), SellCb(action="send"))],
         [btn(ctx.t("sell.edit"), SellCb(action="edit")), btn(ctx.t("sell.cancel"), SellCb(action="cancel"))],
     )
@@ -191,14 +238,14 @@ async def menu_sell(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     await state.set_data({"mode": "new", "draft": {}, "accepted": False})
     await message.answer(ctx.t("sell.intro"), reply_markup=main_menu(ctx))
-    await ask(message, state, ctx, "city")
+    await ask(message, state, ctx, "kind")
 
 
 async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dict) -> None:
     """Called from «My listings»: open the preview of an existing listing for editing."""
     draft = {k: listing[k] for k in (
         "city", "tariff", "end_date", "start_date", "price", "price_negotiable", "description", "screenshot_file_id",
-        "seller_name", "seller_phone", "monthly_payment", "payments_left",
+        "seller_name", "seller_phone", "monthly_payment", "payments_left", "kind", "promo_code",
     )}
     draft["paid_in_full"] = None if listing["paid_in_full"] is None else bool(listing["paid_in_full"])
     await state.clear()
@@ -210,7 +257,7 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
         "accepted": listing["commission_accepted_price"] == listing["price"],
     })
     await message.answer(ctx.t("sell.edit_intro", id=listing["id"]))
-    if draft["paid_in_full"] is None:
+    if draft["kind"] == LK.MEMBERSHIP and draft["paid_in_full"] is None:
         # Listed before the question existed: ask it first, then show the preview.
         await state.update_data(single=True)
         await ask(message, state, ctx, "payment")
@@ -219,7 +266,7 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
 
 
 # ------------------------------------------------------------------ navigation
-_WIZARD = (SellForm.city, SellForm.tariff, SellForm.date, SellForm.start, SellForm.payment, SellForm.monthly,
+_WIZARD = (SellForm.kind, SellForm.code, SellForm.city, SellForm.tariff, SellForm.date, SellForm.start, SellForm.payment, SellForm.monthly,
            SellForm.left, SellForm.price, SellForm.desc, SellForm.photo, SellForm.name, SellForm.phone,
            SellForm.preview, SellForm.choose)
 
@@ -249,7 +296,7 @@ async def on_back(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
         await ask(call.message, state, ctx, _neighbour(data, step, -1))  # the installment answers come together
     elif data.get("single") and step != "phone":
         await show_preview(call.message, state, ctx)
-    elif step == "city":
+    elif step == "kind":
         await show_preview(call.message, state, ctx)
     else:
         await ask(call.message, state, ctx, _neighbour(data, step, -1))
@@ -270,6 +317,25 @@ async def _phone_text_nav(message: Message, state: FSMContext, ctx: Ctx) -> bool
 
 
 # ------------------------------------------------------------------ steps
+@router.callback_query(SellForm.kind, SellCb.filter(F.action == "kind"))
+async def on_kind(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
+    if callback_data.value not in LK.ALL:
+        await call.answer(ctx.t("common.stale"), show_alert=True)
+        return
+    await call.answer()
+    choice = ctx.t("sell.kind_promo" if callback_data.value == LK.PROMO else "sell.kind_membership")
+    await call.message.edit_text(ctx.t("sell.ask_kind") + "\n\n<b>" + esc(choice) + "</b>")
+    if _kind(await state.get_data()) != callback_data.value:
+        await state.update_data(accepted=False)  # another kind, another commission: confirm it again
+    await draft_update(state, kind=callback_data.value)
+    await advance(call.message, state, ctx, "kind")
+
+
+@router.message(SellForm.code)
+async def on_code(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    await _text_step(message, state, ctx, "code", parse_promo_code, "promo_code")
+
+
 @router.callback_query(SellForm.city, SellCb.filter(F.action == "city"))
 async def on_city(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
     if callback_data.value not in CITIES:
@@ -277,7 +343,7 @@ async def on_city(call: CallbackQuery, callback_data: SellCb, state: FSMContext,
         return
     await call.answer()
     await call.message.edit_text(
-        ctx.t("sell.ask_city") + " <b>" + esc(ctx.i18n.city(ctx.lang, callback_data.value)) + "</b>"
+        prompt(ctx, await state.get_data(), "city") + " <b>" + esc(ctx.i18n.city(ctx.lang, callback_data.value)) + "</b>"
     )
     await draft_update(state, city=callback_data.value)
     await advance(call.message, state, ctx, "city")
@@ -338,7 +404,7 @@ async def on_payment(call: CallbackQuery, callback_data: SellCb, state: FSMConte
     full = callback_data.value == "full"
     await call.answer()
     choice = ctx.t("sell.pay_full" if full else "sell.pay_installment")
-    await call.message.edit_text(ctx.t("sell.ask_payment") + "\n\n<b>" + esc(choice) + "</b>")
+    await call.message.edit_text(prompt(ctx, await state.get_data(), "payment") + "\n\n<b>" + esc(choice) + "</b>")
     if full:
         await draft_update(state, paid_in_full=True, monthly_payment=None, payments_left=None)
     else:
@@ -374,7 +440,7 @@ async def on_price(message: Message, state: FSMContext, ctx: Ctx) -> None:
             await message.answer(ctx.t("sell.accept_reset"))
         await state.update_data(accepted=False)
     await draft_update(state, price=price)
-    await message.answer(ctx.t("sell.price_calc", block=commission_block(ctx, price)))
+    await message.answer(ctx.t("sell.price_calc", block=commission_block(ctx, price, _kind(data))))
     await advance(message, state, ctx, "price")
 
 
@@ -468,7 +534,10 @@ async def on_negotiable(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> Non
 @router.callback_query(SellForm.preview, SellCb.filter(F.action == "edit"))
 async def on_edit(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
     await state.set_state(SellForm.choose)
-    names = [btn(ctx.t(f"sell.field.{f}"), SellCb(action="field", value=f)) for f in FIELDS]
+    data = await state.get_data()
+    promo = _kind(data) == LK.PROMO
+    names = [btn(ctx.t(f"sell.field.{f}_promo" if promo and f in ("tariff", "date") else f"sell.field.{f}"),
+                 SellCb(action="field", value=f)) for f in _fields(data)]
     rows = [names[i:i + 2] for i in range(0, len(names), 2)]
     rows.append([btn(ctx.t("sell.to_preview"), SellCb(action="preview"))])
     await call.answer()
@@ -479,7 +548,7 @@ async def on_edit(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
 @router.callback_query(SellForm.choose, SellCb.filter(F.action == "field"))
 async def on_field(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
     step = FIELDS.get(callback_data.value)
-    if not step:
+    if not step or callback_data.value not in _fields(await state.get_data()):
         await call.answer(ctx.t("common.stale"), show_alert=True)
         return
     await call.answer()
@@ -502,8 +571,13 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
     if not data.get("accepted"):
         await call.answer(ctx.t("sell.need_accept"), show_alert=True)
         return
-    if draft.get("paid_in_full") is None or (draft["paid_in_full"] is False
-                                             and not (draft.get("monthly_payment") and draft.get("payments_left"))):
+    if draft.get("kind") is None:
+        await call.answer()
+        await call.message.edit_reply_markup(reply_markup=None)
+        await ask(call.message, state, ctx, "kind")
+        return
+    if draft["kind"] == LK.MEMBERSHIP and (draft.get("paid_in_full") is None or (draft["paid_in_full"] is False
+                                             and not (draft.get("monthly_payment") and draft.get("payments_left")))):
         # Fully paid or installment is not answered yet (an old listing or an abandoned step).
         await call.answer()
         await call.message.edit_reply_markup(reply_markup=None)
@@ -536,7 +610,8 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
     ))
 
 
-# Text typed while a button is expected (city / payment / preview / field menu).
+# Text typed while a button is expected (kind / city / payment / preview / field menu).
+@router.message(SellForm.kind)
 @router.message(SellForm.city)
 @router.message(SellForm.payment)
 @router.message(SellForm.preview)

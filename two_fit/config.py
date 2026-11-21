@@ -16,13 +16,14 @@ class Config:
     admin_ids: frozenset[int]
     support_username: str
     db_path: Path
-    commission_percent: int
+    commission_percent: int  # for a membership
     page_size: int
     welcome_image: Path
     logo: Path
     webapp_url: str = ""  # public https:// address of the Mini App; empty = Mini App is off
     webapp_host: str = "127.0.0.1"
     webapp_port: int = 8080
+    promo_commission_percent: int = 30  # for a promo code
 
     @property
     def webapp_enabled(self) -> bool:
@@ -63,4 +64,5 @@ def load_config() -> Config:
         webapp_url=os.getenv("WEBAPP_URL", "").strip(),
         webapp_host=os.getenv("WEBAPP_HOST", "127.0.0.1").strip() or "127.0.0.1",
         webapp_port=int(os.getenv("WEBAPP_PORT", "8080")),
+        promo_commission_percent=int(os.getenv("PROMO_COMMISSION_PERCENT", "30")),
     )

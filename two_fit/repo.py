@@ -42,6 +42,12 @@ class LS:  # listing statuses
     ADMIN_REMOVABLE = (PENDING, APPROVED, REJECTED)
 
 
+class LK:  # what a listing sells
+    MEMBERSHIP = "membership"  # a 1Fit membership, re-registered to the buyer
+    PROMO = "promo"            # a 1Fit promo code, handed to the buyer by the operator
+    ALL = (MEMBERSHIP, PROMO)
+
+
 class RS:  # purchase request statuses
     NEW = "new"
     SELECTED = "selected"
@@ -83,6 +89,8 @@ CREATE TABLE IF NOT EXISTS listings (
     id                        INTEGER PRIMARY KEY AUTOINCREMENT,
     seller_id                 INTEGER NOT NULL REFERENCES users(id),
     lang                      TEXT NOT NULL,
+    kind                      TEXT NOT NULL DEFAULT 'membership',  -- membership | promo
+    promo_code                TEXT,               -- promo: the code itself, only the admin and the seller see it
     city                      TEXT NOT NULL,
     tariff                    TEXT NOT NULL,
     end_date                  TEXT NOT NULL,      -- YYYY-MM-DD
@@ -167,9 +175,10 @@ def _row(row: aiosqlite.Row | None) -> dict[str, Any] | None:
 
 
 class Repo:
-    def __init__(self, db_path: str | Path, commission_percent: int = 10):
+    def __init__(self, db_path: str | Path, commission_percent: int = 10, promo_commission_percent: int = 30):
         self.db_path = str(db_path)
         self.commission_percent = commission_percent
+        self.promo_commission_percent = promo_commission_percent
         self._db: aiosqlite.Connection | None = None
         # One connection shared by all handlers: the lock keeps transactions from interleaving.
         self._lock = asyncio.Lock()
@@ -195,6 +204,10 @@ class Repo:
         for column in ("paid_in_full", "monthly_payment", "payments_left"):
             if column not in columns:
                 await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} INTEGER")
+        if "kind" not in columns:
+            await self.db.execute("ALTER TABLE listings ADD COLUMN kind TEXT NOT NULL DEFAULT 'membership'")
+        if "promo_code" not in columns:
+            await self.db.execute("ALTER TABLE listings ADD COLUMN promo_code TEXT")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -282,6 +295,10 @@ class Repo:
         """Visible in the catalog and open for purchase requests."""
         return bool(listing) and listing["status"] == LS.APPROVED and not self.is_expired(listing, today)
 
+    def percent_for(self, kind: str | None) -> int:
+        """Commission: 10% for a membership, 30% for a promo code (both from the settings)."""
+        return self.promo_commission_percent if kind == LK.PROMO else self.commission_percent
+
     @staticmethod
     def _check_draft(draft: dict[str, Any]) -> None:
         required = ("city", "tariff", "end_date", "price", "seller_name", "seller_phone")
@@ -290,6 +307,13 @@ class Repo:
         if draft.get("commission_accepted_price") != draft["price"]:
             # The seller must have accepted the commission for exactly this price.
             raise RepoError("commission_not_accepted")
+        kind = draft.get("kind") or LK.MEMBERSHIP
+        if kind not in LK.ALL:
+            raise RepoError("incomplete")
+        if kind == LK.PROMO:
+            if not draft.get("promo_code"):
+                raise RepoError("incomplete")
+            return  # a promo code has no start date and no installments: they are not stored
         if draft.get("start_date") and draft["start_date"] >= draft["end_date"]:
             raise RepoError("bad_start")
         # Fully paid or installment must be stated: «9 months, 500 000» meant 500 000 every month.
@@ -298,6 +322,13 @@ class Repo:
             raise RepoError("incomplete")
         if not paid and not (draft.get("monthly_payment") and draft.get("payments_left")):
             raise RepoError("incomplete")
+
+    @staticmethod
+    def _kind_fields(draft: dict[str, Any]) -> tuple[Any, ...]:
+        """kind, promo_code, start_date, paid_in_full, monthly_payment, payments_left — by what is sold."""
+        if draft.get("kind") == LK.PROMO:
+            return LK.PROMO, draft["promo_code"], None, None, None, None
+        return (LK.MEMBERSHIP, None, draft.get("start_date"), *Repo._payment(draft))
 
     @staticmethod
     def _payment(draft: dict[str, Any]) -> tuple[int, int | None, int | None]:
@@ -310,15 +341,14 @@ class Repo:
         async with self.tx():
             ts = now_iso()
             cur = await self.db.execute(
-                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, start_date, price, price_negotiable,
-                       paid_in_full, monthly_payment, payments_left,
+                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, kind, promo_code, start_date,
+                       paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
                        status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    seller_id, lang, draft["city"], draft["tariff"], draft["end_date"], draft.get("start_date"),
-                    draft["price"],
-                    int(bool(draft.get("price_negotiable"))), *self._payment(draft),
+                    seller_id, lang, draft["city"], draft["tariff"], draft["end_date"], *self._kind_fields(draft),
+                    draft["price"], int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, ts, ts,
                 ),
@@ -336,14 +366,14 @@ class Repo:
             if listing["status"] not in LS.SELLER_EDITABLE:
                 raise RepoError("bad_status")
             await self.db.execute(
-                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, start_date=?, price=?, price_negotiable=?,
-                       paid_in_full=?, monthly_payment=?, payments_left=?, description=?,
+                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, start_date=?,
+                       paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?,
                        status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
                    WHERE id=?""",
                 (
-                    lang, draft["city"], draft["tariff"], draft["end_date"], draft.get("start_date"), draft["price"],
-                    int(bool(draft.get("price_negotiable"))), *self._payment(draft),
+                    lang, draft["city"], draft["tariff"], draft["end_date"], *self._kind_fields(draft), draft["price"],
+                    int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, now_iso(), listing_id,
                 ),
@@ -624,7 +654,7 @@ class Repo:
             if not listing["final_price"] or not listing["final_price_confirmed"]:
                 raise RepoError("price_not_confirmed")
             req = await self.get_request(listing["reserved_request_id"]) if listing["reserved_request_id"] else None
-            c = calc_commission(listing["final_price"], self.commission_percent)
+            c = calc_commission(listing["final_price"], self.percent_for(listing["kind"]))
             ts = now_iso()
             cur = await self.db.execute(
                 """INSERT INTO deals(listing_id, request_id, seller_id, seller_name, seller_phone, buyer_id,

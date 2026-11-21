@@ -104,6 +104,18 @@ def parse_payments_left(text: str | None) -> int:
     return int(m.group(1))
 
 
+PROMO_CODE_MAX = 40
+_PROMO_CODE = re.compile(r"[0-9A-Za-zА-Яа-яЁёЎўҚқҒғҲҳ_\-]{3,%d}" % PROMO_CODE_MAX)
+
+
+def parse_promo_code(text: str | None) -> str:
+    """The 1Fit promo code being sold: one word of letters, digits, «-» and «_»."""
+    value = (text or "").strip()
+    if not _PROMO_CODE.fullmatch(value):
+        raise ValidationError("bad_promo_code")
+    return value
+
+
 def normalize_phone(text: str | None) -> str:
     """Return '+998901234567'-style phone or raise."""
     raw = (text or "").strip()

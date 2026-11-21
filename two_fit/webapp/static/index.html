@@ -140,7 +140,7 @@ p { margin: 0; }
 .badge.inst { background: var(--tint); color: var(--text); }
 .hero .inst-note { margin-top: 10px; font-size: 14px; font-weight: 500; }
 .field .seg { margin-top: 8px; background: var(--page); }
-.field[hidden] { display: none; }
+.field[hidden], .card[hidden] { display: none; }
 
 /* detail */
 .hero { padding: 18px 18px 20px; background: var(--lime); color: var(--ink); }
@@ -321,7 +321,9 @@ const money = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 // «7 мая 2027»: plain numbers like 07.05.2027 confuse people.
 const dmy = (iso) => { const [y, m, d] = iso.split("-").map(Number); return d + " " + T("app.months").split(",")[m - 1] + " " + y; };
 const city = (code) => T("city." + code);
-const fee = (price) => Math.floor((price * B.vars.percent + 50) / 100);
+// Two Fit commission: 10% for a membership, 30% for a promo code.
+const pct = (kind) => (kind === "promo" ? B.vars.promo_percent : B.vars.percent);
+const fee = (price, kind) => Math.floor((price * pct(kind) + 50) / 100);
 
 async function api(method, path, body) {
   const opt = { method, headers: { Authorization: "tma " + tg.initData } };
@@ -417,7 +419,7 @@ function listingRow(l, onclick, extra) {
     h("div", { class: "main" },
       h("div", { class: "title" }, l.tariff),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
-      usageBar(l), extra || [priceBadge(l), " ", payBadge(l)]),
+      usageBar(l), extra || [promoBadge(l), priceBadge(l), " ", payBadge(l)]),
     h("div", { class: "price num" }, money(l.price), h("small", null, T("app.sum"))));
 }
 function cheapestFlag() {
@@ -440,6 +442,8 @@ const priceBadge = (l) => h("span", { class: "badge ptype " + (l.price_negotiabl
   T(l.price_negotiable ? "app.badge.negotiable" : "app.badge.fixed"));
 const installment = (l) => l.paid_in_full === false && l.monthly_payment && l.payments_left;
 const installmentVars = (l) => ({ monthly: money(l.monthly_payment), left: l.payments_left, total: money(l.monthly_payment * l.payments_left) });
+const isPromo = (l) => l.kind === "promo";
+const promoBadge = (l) => isPromo(l) ? [h("span", { class: "badge ptype inst" }, "🎁 " + T("app.badge.promo")), " "] : null;
 const payBadge = (l) => installment(l) ? h("span", { class: "badge ptype inst" }, T("app.pay.installment_row", installmentVars(l))) : null;
 const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.negotiable") : "");
 
@@ -480,9 +484,9 @@ function catalogView(view, rev) {
 function publicRows(l) {
   return h("div", { class: "card rows" },
     h("div", null, h("span", { class: "k" }, T("app.f.city")), h("span", { class: "v" }, city(l.city))),
-    h("div", null, h("span", { class: "k" }, T("app.f.tariff")), h("span", { class: "v" }, l.tariff)),
+    h("div", null, h("span", { class: "k" }, T(isPromo(l) ? "app.f.what_promo" : "app.f.tariff")), h("span", { class: "v" }, l.tariff)),
     l.start_date ? h("div", null, h("span", { class: "k" }, T("app.f.start")), h("span", { class: "v num" }, dmy(l.start_date))) : null,
-    h("div", null, h("span", { class: "k" }, T("app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))),
+    h("div", null, h("span", { class: "k" }, T(isPromo(l) ? "app.f.date_promo" : "app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))),
     l.paid_in_full == null ? null : h("div", null, h("span", { class: "k" }, T("app.f.pay_short")),
       h("span", { class: "v num" }, installment(l) ? T("app.pay.installment_row", installmentVars(l)) : T("app.pay.full_row"))));
 }
@@ -490,7 +494,7 @@ function priceHero(l) {
   return h("div", { class: "card hero" },
     h("div", { class: "label" }, T("app.f.price")),
     h("div", { class: "value num" }, money(l.price) + " ", h("small", null, T("app.sum"))),
-    priceBadge(l),
+    promoBadge(l), priceBadge(l),
     installment(l) ? h("div", { class: "inst-note num" }, "💳 " + T("app.pay.installment_note", installmentVars(l))) : null);
 }
 
@@ -573,9 +577,9 @@ function buyView(view) {
 function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
-        paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "",
+        kind: l.kind, code: l.promo_code || "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "",
         name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: true }  // shot: an earlier screenshot stays attached
-    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
+    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: null, code: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
 
 function sellForm(d, onDone) {
@@ -592,6 +596,17 @@ function sellForm(d, onDone) {
   date.addEventListener("change", () => { d.end_date = date.value; });
   const start = bind(h("input", { type: "date", min: L.start_min, max: L.start_max, value: d.start_date }), "start_date");
   start.addEventListener("change", () => { d.start_date = start.value; });
+
+  // What is sold: a membership (10%) or a promo code (30%). Fixed once listed.
+  const kindErr = h("div", { class: "err", hidden: true });
+  const kindSeg = h("div", { class: "seg", role: "group", "aria-label": T("app.f.kind") },
+    ["membership", "promo"].map((k) => h("button", { type: "button", "data-kind": k, onclick: () => {
+      if (d.kind !== k) { d.accept = accept.checked = false; }  // another kind, another commission
+      d.kind = k; setError(fields.kind, ""); drawKind();
+    } }, T("app.kind." + k))));
+  const kindWrap = h("div", { class: "field" }, h("span", null, T("app.f.kind")), kindSeg, kindErr);
+  kindWrap.error = kindErr;
+  const code = bind(h("input", { type: "text", maxLength: 40, autocomplete: "off", autocapitalize: "characters", spellcheck: false, value: d.code }), "code");
 
   // Fully paid or installment: «9 months, 500 000» turned out to be 500 000 every month.
   const payErr = h("div", { class: "err", hidden: true });
@@ -614,15 +629,16 @@ function sellForm(d, onDone) {
 
   const calc = h("div", { class: "card rows", hidden: true });
   const accept = h("input", { type: "checkbox", checked: d.accept });
-  const acceptRow = h("label", { class: "card check" }, accept, h("span", null, T("app.sell.accept")));
+  const acceptText = h("span", null, T("app.sell.accept", { percent: pct(d.kind) }));
+  const acceptRow = h("label", { class: "card check" }, accept, acceptText);
   const drawCalc = () => {
     const p = Number(d.price);
     calc.hidden = !(p >= L.price_min && p <= L.price_max);
     if (calc.hidden) return;
-    const f = fee(p);
+    const f = fee(p, d.kind);
     calc.replaceChildren(
       h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(p) + " " + T("app.sum"))),
-      h("div", null, h("span", { class: "k" }, T("app.c.fee")), h("span", { class: "v num" }, "− " + money(f) + " " + T("app.sum"))),
+      h("div", null, h("span", { class: "k" }, T("app.c.fee", { percent: pct(d.kind) })), h("span", { class: "v num" }, "− " + money(f) + " " + T("app.sum"))),
       h("div", { class: "strong" }, h("span", { class: "k" }, T("app.c.net")), h("span", { class: "v num" }, money(p - f) + " " + T("app.sum"))));
   };
   const price = h("input", { type: "text", inputMode: "numeric", placeholder: "2 000 000", value: d.price ? money(d.price) : "" });
@@ -647,6 +663,8 @@ function sellForm(d, onDone) {
   const phone = bind(h("input", { type: "tel", autocomplete: "tel", inputMode: "tel", placeholder: "+998 90 123 45 67", value: d.phone }), "phone");
 
   const fields = {
+    kind: kindWrap,
+    promo_code: field(T("app.f.code"), code, { hint: "🔒 " + T("app.sell.code_hint") }),
     city: field(T("app.f.city"), citySel),
     tariff: field(T("app.f.tariff"), tariff),
     end_date: field(T("app.f.date"), date),
@@ -661,19 +679,37 @@ function sellForm(d, onDone) {
     accept: acceptRow,
   };
   const priceHint = fields.price.querySelector(".hint");
+  const label = (wrap) => wrap.querySelector("span");
+  const payCard = h("div", { class: "card" }, fields.payment, fields.monthly_payment, fields.payments_left);
   const drawPay = () => {
     paySeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.paid === (b.dataset.full === "true"))));
     fields.monthly_payment.hidden = fields.payments_left.hidden = d.paid !== false;
-    priceHint.textContent = T(d.paid === false ? "app.sell.price_hint_installment" : "app.sell.price_hint");
+    priceHint.textContent = T(d.kind === "promo" ? "app.sell.price_hint_promo"
+      : d.paid === false ? "app.sell.price_hint_installment" : "app.sell.price_hint");
+  };
+  const drawKind = () => {
+    const promo = d.kind === "promo";
+    kindSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.kind === b.dataset.kind)));
+    fields.kind.hidden = !!d.id;  // an existing listing keeps what it sells
+    fields.promo_code.hidden = !promo;
+    fields.start_date.hidden = promo;
+    payCard.hidden = promo;
+    label(fields.tariff).textContent = T(promo ? "app.f.what_promo" : "app.f.tariff");
+    tariff.placeholder = T(promo ? "app.sell.what_promo_ph" : "app.sell.tariff_ph");
+    label(fields.end_date).textContent = T(promo ? "app.f.date_promo" : "app.f.date");
+    acceptText.textContent = T("app.sell.accept", { percent: pct(d.kind) });
+    drawPay(); drawCalc();
   };
   const submit = h("button", { class: "btn", type: "submit" }, T("app.sell.submit"));
   const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
     e.preventDefault();
     if (submit.disabled) return;
-    if (d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
+    if (!d.kind) { showFieldError(fields, { field: "kind", message: T("app.err.kind") }); return; }
+    if (d.kind === "membership" && d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
     if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
     submit.disabled = true;
     const body = { city: d.city, tariff: d.tariff, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
+                   kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
                    paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
                    description: d.description, name: d.name, phone: d.phone, accepted_price: Number(d.price), screenshot: d.shot };
     try {
@@ -686,8 +722,9 @@ function sellForm(d, onDone) {
       showFieldError(fields, err);
     }
   } },
-    h("div", { class: "card" }, fields.city, fields.tariff, fields.end_date, fields.start_date),
-    h("div", { class: "card" }, fields.payment, fields.monthly_payment, fields.payments_left),
+    d.id ? null : h("div", { class: "card" }, fields.kind),
+    h("div", { class: "card" }, fields.city, fields.tariff, fields.end_date, fields.start_date, fields.promo_code),
+    payCard,
     h("div", { class: "card" }, fields.price, negotiableRow), calc,
     h("div", { class: "card" }, fields.description),
     h("h2", null, T("app.sell.contacts")),
@@ -696,7 +733,7 @@ function sellForm(d, onDone) {
     acceptRow,
     h("p", { class: "note" }, T("commission.note")),
     submit);
-  drawCalc(); drawCounter(); drawPay();
+  drawCounter(); drawKind();
   return form;
 }
 
@@ -758,11 +795,12 @@ function mineView(view) {
       l.description ? h("div", { class: "card text" }, l.description) : null,
       h("div", { class: "card rows" },
         h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(l.price) + " " + sumLabel(l))),
-        h("div", null, h("span", { class: "k" }, T("app.c.fee")), h("span", { class: "v num" }, "− " + money(l.commission) + " " + T("app.sum"))),
+        h("div", null, h("span", { class: "k" }, T("app.c.fee", { percent: l.percent })), h("span", { class: "v num" }, "− " + money(l.commission) + " " + T("app.sum"))),
         h("div", { class: "strong" }, h("span", { class: "k" }, T("app.c.net")), h("span", { class: "v num" }, money(l.net) + " " + T("app.sum")))),
       h("h2", null, "🔒 " + T("app.my.private")),
       h("div", { class: "card rows" },
         h("div", null, h("span", { class: "k" }, l.seller_name), h("span", { class: "v num" }, l.seller_phone)),
+        l.promo_code ? h("div", null, h("span", { class: "k" }, T("app.f.code")), h("span", { class: "v num" }, l.promo_code)) : null,
         l.has_screenshot ? h("div", null, h("span", { class: "k" }, T("app.my.shot_yes"))) : null),
       h("div", { class: "stack", style: "margin-top:20px" },
         l.can_edit ? h("button", { class: "btn", type: "button", onclick: () => go({ name: "edit", listing: l }) }, T("app.my.edit")) : null,

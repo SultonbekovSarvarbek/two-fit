@@ -60,7 +60,8 @@ async def api(h):
 def draft(**over):
     body = {"city": "tashkent", "tariff": "Безлимит 12 месяцев", "end_date": END, "price": "2 000 000",
             "description": "Осталось 7 месяцев", "name": "Алишер", "phone": "+998 90 111 22 33",
-            "accepted_price": 2_000_000, "screenshot": None, "paid_in_full": True}
+            "accepted_price": 2_000_000, "screenshot": None, "paid_in_full": True,
+            "kind": "membership"}
     body.update(over)
     return body
 
@@ -200,7 +201,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     assert {c["code"]: c["count"] for c in cat["cities"]} == {"tashkent": 1, "samarkand": 1}
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
-                             "description", "paid_in_full", "monthly_payment", "payments_left"}
+                             "description", "paid_in_full", "monthly_payment", "payments_left", "kind"}
         assert item["start_date"] is None and item["usage"] is None
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]
@@ -364,3 +365,30 @@ async def test_installment_is_asked_and_shown(h, api):
     assert (stored["paid_in_full"], stored["monthly_payment"], stored["payments_left"]) == (1, None, None)
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
     assert {"app.pay.full", "app.pay.installment", "app.pay.installment_note", "app.err.payment"} <= set(boot["texts"])
+
+
+async def test_promo_code_listing(h, api):
+    status, data = await api.call("POST", "/api/listings", SELLER, draft(kind="gift"))
+    assert status == 400 and data["field"] == "kind"
+    promo = dict(kind="promo", promo_code="FIT-2026", tariff="Безлимит на 1 месяц", price="100 000",
+                 accepted_price=100_000, paid_in_full=None)
+    status, data = await api.call("POST", "/api/listings", SELLER, draft(**{**promo, "promo_code": "no spaces"}))
+    assert status == 400 and data["field"] == "promo_code"
+    lid = await publish(h, api, **promo)
+    stored = await h.repo.get_listing(lid)
+    assert (stored["kind"], stored["promo_code"], stored["paid_in_full"]) == ("promo", "FIT-2026", None)
+
+    # Buyers see that it is a promo code, never the code itself.
+    _, cat = await api.call("GET", "/api/catalog", BUYER)
+    assert cat["items"][0]["kind"] == "promo" and "FIT-2026" not in str(cat)
+    _, card = await api.call("GET", f"/api/listings/{lid}", BUYER)
+    assert "FIT-2026" not in str(card)
+    # The seller sees the code and a 30% commission.
+    _, mine = await api.call("GET", "/api/my", SELLER)
+    own = mine["items"][0]
+    assert own["promo_code"] == "FIT-2026" and (own["percent"], own["commission"], own["net"]) == (30, 30_000, 70_000)
+    # What is sold cannot be changed by editing.
+    status, _ = await api.call("PUT", f"/api/listings/{lid}", SELLER, draft(**{**promo, "kind": "membership"}))
+    assert status == 200 and (await h.repo.get_listing(lid))["kind"] == "promo"
+    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+    assert boot["vars"]["promo_percent"] == 30 and "app.kind.promo" in boot["texts"]

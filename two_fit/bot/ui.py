@@ -138,13 +138,14 @@ def usage_line(ctx: Ctx, data: dict[str, Any]) -> str:
 def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—") -> str:
     """Public part of a listing: only what a buyer may see. Labels in the viewer's language,
     the seller's own words (tariff, description) as written."""
+    promo = data.get("kind") == "promo"
     text = ctx.t(
-        "card.body",
+        "card.body_promo" if promo else "card.body",
         id=listing_id,
         city=esc(ctx.i18n.city(ctx.lang, data["city"])),
         tariff=esc(data["tariff"]),
         date=fmt_day(ctx, data["end_date"]),
-        usage=usage_line(ctx, data),
+        usage="" if promo else usage_line(ctx, data),
         price=fmt_money(data["price"]),
     )
     if data.get("price_negotiable"):
@@ -168,10 +169,11 @@ def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:
     return ctx.t("card.installment", monthly=fmt_money(monthly), left=left, total=fmt_money(monthly * left))
 
 
-def commission_block(ctx: Ctx, price: int) -> str:
-    c = ctx.commission(price)
+def commission_block(ctx: Ctx, price: int, kind: str | None = None) -> str:
+    c = ctx.commission(price, kind)
     return ctx.t(
-        "commission.block", price=fmt_money(c.price), commission=fmt_money(c.commission), net=fmt_money(c.net)
+        "commission.block", price=fmt_money(c.price), commission=fmt_money(c.commission), net=fmt_money(c.net),
+        percent=c.percent,
     )
 
 

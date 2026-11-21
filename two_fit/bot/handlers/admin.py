@@ -88,7 +88,10 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
         lang=listing["lang"],
         created=fmt_dt(listing["created_at"]),
     )
-    extra = [ctx.t("admin.card.accepted", price=fmt_money(listing["commission_accepted_price"]))]
+    extra = [ctx.t("admin.card.accepted", price=fmt_money(listing["commission_accepted_price"]),
+                   percent=ctx.percent(listing["kind"]))]
+    if listing["promo_code"]:
+        extra.insert(0, ctx.t("admin.card.promo_code", code=esc(listing["promo_code"])))
     if listing["status"] == LS.APPROVED and ctx.repo.is_expired(listing):
         extra.append(ctx.t("admin.card.expired"))
     if listing["reject_reason"] and listing["status"] == LS.REJECTED:
@@ -374,7 +377,7 @@ async def _listing_action(call: CallbackQuery, ctx: Ctx, state: FSMContext, noti
         if not listing["final_price"] or not listing["final_price_confirmed"]:
             raise RepoError("price_not_confirmed")
         await call.answer()
-        await _show(call, ctx.t("admin.confirm_close", id=lid, block=commission_block(ctx, listing["final_price"])),
+        await _show(call, ctx.t("admin.confirm_close", id=lid, block=commission_block(ctx, listing["final_price"], listing["kind"])),
                     confirm_kb(ctx, A("close!", id=lid), A("open", id=lid)))
     elif a == "close!":
         deal, others = await repo.close_deal(lid, ctx.user_id)
@@ -382,7 +385,8 @@ async def _listing_action(call: CallbackQuery, ctx: Ctx, state: FSMContext, noti
                                 commission=fmt_money(deal["commission_amount"])), show_alert=True)
         await _show(call, *await render_deal(ctx, deal))
         await notifier.user(ctx, deal["seller_id"], lambda u: (
-            u.t("notify.deal_closed_seller", id=lid, block=commission_block(u, deal["sale_price"])), None))
+            u.t("notify.deal_closed_seller", id=lid, block=commission_block(u, deal["sale_price"], listing["kind"])),
+            None))
         if deal["buyer_id"]:
             await notifier.user(ctx, deal["buyer_id"], lambda u: (u.t("notify.deal_closed_buyer", id=lid), None))
         await notifier.users(ctx, others, lambda u: (u.t("notify.request_closed", id=lid), None))
@@ -426,7 +430,7 @@ async def on_final_price(message: Message, state: FSMContext, ctx: Ctx, notifier
     if needs_confirm:
         await message.answer(ctx.t("admin.final_wait", price=fmt_money(price)))
         await notifier.user(ctx, listing["seller_id"], lambda u: (
-            u.t("notify.price_confirm", id=lid, block=commission_block(u, price)),
+            u.t("notify.price_confirm", id=lid, block=commission_block(u, price, listing["kind"])),
             kb([btn(u.t("notify.price_yes"), PriceCb(id=lid, price=price, ok=1))],
                [btn(u.t("notify.price_no"), PriceCb(id=lid, price=price, ok=0))]),
         ))
