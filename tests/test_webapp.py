@@ -14,7 +14,7 @@ from two_fit.i18n import I18n
 from two_fit.repo import LS, today_local
 from two_fit.webapp.server import create_webapp
 
-from .harness import Harness, text_of, texts
+from .harness import Harness, buttons_of, text_of, texts
 
 SELLER, BUYER, STRANGER, ADMIN = 1, 2, 3, 900
 END = (today_local() + timedelta(days=200)).isoformat()
@@ -502,3 +502,58 @@ async def test_freeze_days_are_saved_and_shown(h, api):
     _, card = await api.call("GET", f"/api/listings/{lid}", BUYER)
     assert card["listing"]["freeze_days"] == 20
     assert (await h.repo.get_listing(none))["freeze_days"] == 0
+
+
+async def test_screenshot_is_required_and_seen_only_by_the_admin(tmp_path):
+    h = await Harness(tmp_path / "shot.db", screenshot_required=True).start()
+    try:
+        app = create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"])
+        async with TestClient(TestServer(app)) as client:
+            api = Api(client, h.cfg.bot_token)
+            _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+            assert boot["vars"]["shot_required"] is True
+            assert "только администратор" in boot["texts"]["app.sell.shot_hint_required"]
+            status, err = await api.call("POST", "/api/listings", SELLER, draft())
+            assert (status, err["error"], err["field"]) == (400, "screenshot_required", "screenshot")
+            form = FormData()
+            form.add_field("file", b"\x89PNG fake", filename="shot.png", content_type="image/png")
+            res = await client.post("/api/screenshot", data=form,
+                                    headers={"Authorization": "tma " + init_data(h.cfg.bot_token, SELLER)})
+            shot = await res.json()
+            status, made = await api.call("POST", "/api/listings", SELLER, draft(screenshot=shot))
+            assert status == 201
+            await h.repo.approve(made["id"], ADMIN)
+            _, card = await api.call("GET", f"/api/listings/{made['id']}", BUYER)
+            assert "screenshot" not in str(card) and shot["file_id"] not in str(card)  # never shown to buyers
+            # Editing keeps the attached screenshot.
+            status, _ = await api.call("PUT", f"/api/listings/{made['id']}", SELLER, draft(screenshot="keep"))
+            assert status == 200
+    finally:
+        await h.stop()
+
+
+async def test_bot_requires_the_screenshot(tmp_path):
+    from datetime import timedelta as td
+    from two_fit.repo import today_local as tl
+    h = await Harness(tmp_path / "shot-bot.db", screenshot_required=True).start()
+    try:
+        await h.send(SELLER, "/start")
+        await h.click(SELLER, "lang:ru")
+        await h.send(SELLER, "➕ Продать абонемент")
+        await h.click(SELLER, "sl:kind:membership")
+        await h.click(SELLER, "sl:city:tashkent")
+        await h.click(SELLER, "sl:plan:365")
+        await h.send(SELLER, (tl() + td(days=200)).strftime("%d.%m.%Y"))
+        await h.click(SELLER, "sl:skip:")
+        await h.click(SELLER, "sl:pay:full")
+        await h.click(SELLER, "sl:freeze:no")
+        await h.send(SELLER, "2 000 000")
+        calls = await h.click(SELLER, "sl:skip:")  # no description: on to the screenshot
+        ask = texts(calls)
+        assert "обязательно" in ask and "только администратор" in ask
+        assert not [b for c in calls for b in buttons_of(c) if "Пропустить" in b.text]  # no «Skip» here
+        assert "без него объявление не отправить" in texts(await h.send(SELLER, "нет скрина"))
+        assert "Скриншот добавлен (1/3)" in texts(await h.send(SELLER, photo=True))
+        assert "Как вас зовут" in texts(await h.click(SELLER, "sl:shotsdone:"))
+    finally:
+        await h.stop()

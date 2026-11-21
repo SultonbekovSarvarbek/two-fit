@@ -6,6 +6,7 @@ commission consent, no contacts in public texts). Every request is authenticated
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -24,7 +25,9 @@ from ..bot.context import Ctx
 from ..bot.notify import Notifier
 from ..bot.ui import btn, esc, kb, price_advice
 from ..config import Config
+from .. import ocr
 from ..money import fmt_money, round_k
+from ..ocr import MAX_SCREENSHOTS
 from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
 from ..pricing import DISCOUNT_PERCENT, advise
@@ -126,6 +129,7 @@ def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
         "seller_name": listing["seller_name"],
         "seller_phone": listing["seller_phone"],
         "has_screenshot": bool(listing["screenshot_file_id"]),
+        "screenshot_count": len(Repo.screenshot_ids(listing)),
         "commission": c.commission,
         "net": c.net,
         "can_edit": status in LS.SELLER_EDITABLE,
@@ -137,6 +141,9 @@ def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
 class WebApp:
     def __init__(self, repo: Repo, i18n: I18n, cfg: Config, bot: Bot, notifier: Notifier):
         self.repo, self.i18n, self.cfg, self.bot, self.notifier = repo, i18n, cfg, bot, notifier
+        self.ocr_on = ocr.available()  # Tesseract installed? Without it screenshots are only looked at by the admin
+        if not self.ocr_on:
+            log.info("Tesseract is not installed: screenshots are not read automatically")
 
     # ------------------------------------------------------------------ plumbing
     def build(self) -> web.Application:
@@ -240,7 +247,8 @@ class WebApp:
             "vars": {"operator": self.cfg.operator, "percent": self.cfg.commission_percent,
                      "promo_percent": self.cfg.promo_commission_percent, "fees": ctx.fees(),
                      "promo_enabled": self.cfg.promo_enabled, "auto_price": self.cfg.auto_price,
-                     "discount": DISCOUNT_PERCENT},
+                     "discount": DISCOUNT_PERCENT, "shot_required": self.cfg.screenshot_required,
+                     "ocr": self.ocr_on},
             "support_url": self.cfg.support_url,
             "cities": list(CITIES),
             "user": {"name": ctx.user.get("contact_name") or "", "phone": ctx.user.get("contact_phone") or ""},
@@ -386,16 +394,33 @@ class WebApp:
             raise ApiError(400, "commission_not_accepted", ctx.t("app.err.accept"), "accept")
         draft["commission_accepted_price"] = draft["price"]
 
-        shot = body.get("screenshot")
-        if shot == "keep":
-            draft["screenshot_file_id"] = existing["screenshot_file_id"] if existing else None
-        elif isinstance(shot, dict):
-            file_id, sig = str(shot.get("file_id", "")), str(shot.get("sig", ""))
-            if not file_id or not hmac.compare_digest(sig, self._sign(ctx.user_id, file_id)):
+        # Up to 3 screenshots: {file_id, sig} for a new upload, "keep" for the ones already on the listing.
+        shots = body.get("screenshots")
+        if shots is None:  # older app versions send one
+            shots = [body.get("screenshot")] if body.get("screenshot") else []
+        if not isinstance(shots, list) or len(shots) > MAX_SCREENSHOTS:
+            raise ApiError(400, "bad_photo", ctx.t("app.err.photo"), "screenshot")
+        ids, new_ids, keep = [], [], False
+        for shot in shots:
+            if shot == "keep":
+                keep = True
+                ids += Repo.screenshot_ids(existing) if existing else []
+            elif isinstance(shot, dict):
+                file_id, sig = str(shot.get("file_id", "")), str(shot.get("sig", ""))
+                if not file_id or not hmac.compare_digest(sig, self._sign(ctx.user_id, file_id)):
+                    raise ApiError(400, "bad_photo", ctx.t("app.err.photo"), "screenshot")
+                ids.append(file_id)
+                new_ids.append(file_id)
+            else:
                 raise ApiError(400, "bad_photo", ctx.t("app.err.photo"), "screenshot")
-            draft["screenshot_file_id"] = file_id
-        else:
-            draft["screenshot_file_id"] = None
+        ids = list(dict.fromkeys(ids))[:MAX_SCREENSHOTS]
+        draft["screenshot_file_ids"] = ids
+        draft["screenshot_file_id"] = ids[0] if ids else None
+        draft["new_screenshots"] = new_ids  # what was read from them is added in create/update
+        draft["ocr"] = Repo.ocr_of(existing) if keep and existing else {}
+        if self.cfg.screenshot_required and not draft["screenshot_file_id"]:
+            # The admin checks the end date and the freeze days against the 1Fit card: only they see it.
+            raise ApiError(400, "screenshot_required", ctx.t("app.err.shot_required"), "screenshot")
         return draft
 
     def _seller_contact(self, ctx: Ctx, body: dict[str, Any], existing: dict[str, Any] | None) -> tuple[str, str]:
@@ -470,6 +495,11 @@ class WebApp:
             "days_left": a.days_left, "base_days": a.base_days,
         }})
 
+    async def _add_reads(self, ctx: Ctx, draft: dict[str, Any]) -> None:
+        """What was read from the new screenshots joins what the kept ones gave (the admin compares it)."""
+        reads = await self.repo.screenshot_reads(draft.pop("new_screenshots", []), ctx.user_id)
+        draft["ocr"] = ocr.merge([draft.get("ocr") or {}, *reads])
+
     async def screenshot(self, request: web.Request) -> web.Response:
         """The picture goes to the seller's own chat with the bot; Telegram then stores it for the admin."""
         ctx = request[CTX]
@@ -497,11 +527,15 @@ class WebApp:
         if not sent.photo:
             raise bad
         file_id = sent.photo[-1].file_id
-        return web.json_response({"file_id": file_id, "sig": self._sign(ctx.user_id, file_id)})
+        # Read the 1Fit card (end date, tariff, freeze days): the form fills itself, the admin compares.
+        read = await asyncio.to_thread(ocr.read_card, bytes(buf), today_local()) if self.ocr_on else {}
+        await self.repo.save_screenshot_read(file_id, ctx.user_id, read)
+        return web.json_response({"file_id": file_id, "sig": self._sign(ctx.user_id, file_id), "read": read})
 
     async def create(self, request: web.Request) -> web.Response:
         ctx = request[CTX]
         draft = self._draft(ctx, await self._json(request))
+        await self._add_reads(ctx, draft)
         listing_id = await self.repo.create_listing(ctx.user_id, ctx.lang, draft)
         if draft["seller_phone"]:
             await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
@@ -519,6 +553,7 @@ class WebApp:
         listing_id = int(request.match_info["id"])
         existing = await self._own(ctx, listing_id)
         draft = self._draft(ctx, await self._json(request), existing)
+        await self._add_reads(ctx, draft)
         try:
             await self.repo.update_listing_by_seller(listing_id, ctx.user_id, ctx.lang, draft)
         except RepoError:

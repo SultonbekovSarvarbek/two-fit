@@ -7,10 +7,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InputMediaPhoto, Message
 
 from ...money import fmt_money
-from ...repo import CS, LS, RS, RepoError
+from ... import ocr
+from ...repo import CS, LS, RS, Repo, RepoError
 from ...validators import ValidationError, clean_text, parse_price
 from ..callbacks import AdmCb, FitPriceCb, PriceCb
 from ..context import Ctx
@@ -75,6 +76,29 @@ async def render_list(ctx: Ctx, status: str, page: int) -> tuple[str, InlineKeyb
     )
 
 
+def screen_check(ctx: Ctx, listing: dict) -> list[str]:
+    """For moderation: what the screenshots say and where it differs from the listing."""
+    if not Repo.screenshot_ids(listing) or listing["kind"] == "promo":
+        return []
+    read = Repo.ocr_of(listing)
+    if not read:
+        return [ctx.t("admin.card.ocr_none")] if ocr.available() else []
+    parts = []
+    if read.get("end_date"):
+        parts.append(ctx.t("app.until", date=fmt_date(read["end_date"])))
+    if read.get("tariff_days"):
+        parts.append(ctx.t("sell.screen.tariff_days") + " " + ctx.t(f"app.plan.short.{read['tariff_days']}"))
+    if read.get("freeze_days"):
+        parts.append(ctx.t("sell.screen.freeze_days") + " " + ctx.t("app.freeze_row", days=read["freeze_days"]))
+    if read.get("start_date"):
+        parts.append(ctx.t("app.f.start").lower() + " " + fmt_date(read["start_date"]))
+    lines = [ctx.t("admin.card.ocr", read=" · ".join(parts))]
+    diff = ocr.mismatches(read, {**listing, "freeze_days": listing["freeze_days"] or 0})
+    if diff:
+        lines.append(ctx.t("admin.card.ocr_diff", fields=", ".join(ctx.t(f"sell.screen.{k}") for k in diff)))
+    return lines
+
+
 async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, InlineKeyboardMarkup]:
     seller = await ctx.repo.get_user(listing["seller_id"])
     requests = await ctx.repo.listing_requests(listing["id"])
@@ -93,6 +117,7 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
                    percent=ctx.repo.listing_percent(listing))]
     if listing["promo_code"]:
         extra.insert(0, ctx.t("admin.card.promo_code", code=esc(listing["promo_code"])))
+    extra[0:0] = screen_check(ctx, listing)
     if listing["status"] == LS.APPROVED and ctx.repo.is_expired(listing):
         extra.append(ctx.t("admin.card.expired"))
     if listing["reject_reason"] and listing["status"] == LS.REJECTED:
@@ -325,8 +350,13 @@ async def _listing_action(call: CallbackQuery, ctx: Ctx, state: FSMContext, noti
         await _show(call, *await render_requests(ctx, listing))
     elif a == "shot":
         await call.answer()
-        await call.message.answer_photo(listing["screenshot_file_id"],
-                                        caption=ctx.t("admin.screenshot_caption", id=lid))
+        ids = Repo.screenshot_ids(listing)
+        if len(ids) == 1:
+            await call.message.answer_photo(ids[0], caption=ctx.t("admin.screenshot_caption", id=lid))
+        elif ids:
+            await call.message.answer_media_group([
+                InputMediaPhoto(media=i, caption=ctx.t("admin.screenshot_caption", id=lid) if n == 0 else None)
+                for n, i in enumerate(ids)])
     elif a in ("appr", "apprnd"):
         listing = await repo.approve(lid, ctx.user_id, clear_description=(a == "apprnd"))
         await call.answer(ctx.t("admin.approved_ok", id=lid))

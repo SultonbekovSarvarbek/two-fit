@@ -107,6 +107,8 @@ CREATE TABLE IF NOT EXISTS listings (
     freeze_days               INTEGER,            -- membership: unused freeze days (0 = none); NULL on old listings
     price_auto                INTEGER NOT NULL DEFAULT 0,  -- 1: the recommended price, lowered every day as days pass
     payments_as_of            TEXT,               -- YYYY-MM-DD: the day payments_left was true; one fewer each month after
+    screenshots               TEXT,               -- JSON list of up to 3 Telegram file ids (the first is screenshot_file_id)
+    ocr                       TEXT,               -- JSON: what was read from the screenshots (end_date, tariff_days, …)
     description               TEXT NOT NULL DEFAULT '',
     screenshot_file_id        TEXT,
     seller_name               TEXT NOT NULL,
@@ -176,6 +178,14 @@ CREATE TABLE IF NOT EXISTS fsm (
     data  TEXT
 );
 
+-- What was read from a screenshot uploaded through the Mini App, until the listing that uses it is sent.
+CREATE TABLE IF NOT EXISTS screenshot_reads (
+    file_id    TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL,
+    data       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
@@ -243,6 +253,9 @@ class Repo:
             await self.db.execute("ALTER TABLE listings ADD COLUMN price_auto INTEGER NOT NULL DEFAULT 0")
         if "payments_as_of" not in columns:
             await self.db.execute("ALTER TABLE listings ADD COLUMN payments_as_of TEXT")
+        for column in ("screenshots", "ocr"):
+            if column not in columns:
+                await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} TEXT")
         if "commission_percent" not in columns:
             # Listings made before the rate was stored were accepted at 10% (membership) and 30% (promo code).
             await self.db.execute("ALTER TABLE listings ADD COLUMN commission_percent INTEGER")
@@ -384,6 +397,48 @@ class Repo:
                 *Repo._payment(draft))
 
     @staticmethod
+    def _shots(draft: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+        """screenshot_file_id, screenshots (JSON list, at most 3), ocr (JSON) from a draft."""
+        ids = [i for i in (draft.get("screenshot_file_ids") or []) if i][:3]
+        if not ids and draft.get("screenshot_file_id"):
+            ids = [draft["screenshot_file_id"]]
+        read = draft.get("ocr") or None
+        return (ids[0] if ids else None, json.dumps(ids) if ids else None,
+                json.dumps(read, ensure_ascii=False) if read else None)
+
+    @staticmethod
+    def screenshot_ids(listing: dict[str, Any]) -> list[str]:
+        """All screenshots of a listing; old ones have only screenshot_file_id."""
+        if listing.get("screenshots"):
+            try:
+                return [i for i in json.loads(listing["screenshots"]) if i][:3]
+            except (TypeError, ValueError):
+                pass
+        return [listing["screenshot_file_id"]] if listing.get("screenshot_file_id") else []
+
+    @staticmethod
+    def ocr_of(listing: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return json.loads(listing.get("ocr") or "{}") or {}
+        except (TypeError, ValueError):
+            return {}
+
+    async def save_screenshot_read(self, file_id: str, user_id: int, data: dict[str, Any]) -> None:
+        async with self.tx():
+            await self.db.execute(
+                "INSERT OR REPLACE INTO screenshot_reads(file_id, user_id, data, created_at) VALUES (?,?,?,?)",
+                (file_id, user_id, json.dumps(data, ensure_ascii=False), now_iso()),
+            )
+
+    async def screenshot_reads(self, file_ids: list[str], user_id: int) -> list[dict[str, Any]]:
+        """What was read from these screenshots, in their order; only the uploader's own."""
+        out = []
+        for file_id in file_ids:
+            row = await self._one("SELECT data FROM screenshot_reads WHERE file_id=? AND user_id=?", (file_id, user_id))
+            out.append(json.loads(row["data"]) if row else {})
+        return out
+
+    @staticmethod
     def _auto_fields(draft: dict[str, Any]) -> tuple[int, str | None]:
         """price_auto, payments_as_of: whether the price follows the days, and when payments_left was stated."""
         membership = draft.get("kind") != LK.PROMO
@@ -406,14 +461,15 @@ class Repo:
                        start_date,
                        paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
-                       commission_percent, price_auto, payments_as_of, status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       commission_percent, price_auto, payments_as_of, screenshots, ocr, status, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
-                    draft.get("description") or "", draft.get("screenshot_file_id"),
+                    draft.get("description") or "", self._shots(draft)[0],
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
-                    self.percent_for(draft.get("kind")), *self._auto_fields(draft), LS.PENDING, ts, ts,
+                    self.percent_for(draft.get("kind")), *self._auto_fields(draft), *self._shots(draft)[1:],
+                    LS.PENDING, ts, ts,
                 ),
             )
             listing_id = cur.lastrowid
@@ -432,14 +488,15 @@ class Repo:
                 """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, tariff_days=?, freeze_days=?, start_date=?,
                        paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?, commission_percent=?,
-                       price_auto=?, payments_as_of=?, status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
+                       price_auto=?, payments_as_of=?, screenshots=?, ocr=?, status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
                    WHERE id=?""",
                 (
                     lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft), draft["price"],
                     int(bool(draft.get("price_negotiable"))),
-                    draft.get("description") or "", draft.get("screenshot_file_id"),
+                    draft.get("description") or "", self._shots(draft)[0],
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
-                    self.percent_for(draft.get("kind")), *self._auto_fields(draft), LS.PENDING, now_iso(), listing_id,
+                    self.percent_for(draft.get("kind")), *self._auto_fields(draft), *self._shots(draft)[1:],
+                    LS.PENDING, now_iso(), listing_id,
                 ),
             )
             await self._log(listing_id, seller_id, "edited", price=draft["price"])

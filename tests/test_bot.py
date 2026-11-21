@@ -39,6 +39,7 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     assert "200 000" in texts(calc) and "1 800 000" in texts(calc)
     await h.send(uid, "Қолган 7 ой, зал яқин")
     await h.send(uid, photo=True)
+    await h.click(uid, "sl:shotsdone:")
     await h.send(uid, "Алишер")
     preview = await h.send(uid, contact="+998901112233")
     pt = texts(preview)

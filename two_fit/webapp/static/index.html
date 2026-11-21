@@ -219,6 +219,8 @@ p { margin: 0; }
 .field .counter { position: absolute; right: 16px; top: 11px; font-size: 12.5px; color: var(--hint); }
 .row { display: flex; align-items: center; gap: 12px; padding: 13px 16px; }
 .row .grow { flex: 1; min-width: 0; }
+.shot-btns { display: flex; gap: 6px; flex: none; }
+.row.invalid { box-shadow: inset 0 0 0 2px var(--danger); border-radius: 18px; }
 .check { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; }
 .check input { appearance: none; -webkit-appearance: none; flex: none; width: 24px; height: 24px; margin: 0; border-radius: 8px; border: 2px solid var(--hint); }
 .check input:checked { border-color: var(--accent); background: var(--accent) var(--check) center/16px no-repeat; }
@@ -632,8 +634,8 @@ function newDraft(l) {
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
         kind: l.kind, code: l.promo_code || "", plan: l.tariff_days || null,
         freeze: !!l.freeze_days, freezeDays: l.freeze_days ? String(l.freeze_days) : "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "", leftTyped: !!l.payments_left,
-        name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: !l.rate_changed }  // shot: an earlier screenshot stays attached
-    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
+        name: l.seller_name, phone: l.seller_phone, shots: l.screenshot_count ? ["keep"] : [], keptShots: l.screenshot_count || 0, accept: !l.rate_changed }  // earlier screenshots stay attached
+    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shots: [], keptShots: 0, accept: false };
 }
 
 function sellForm(d, onDone, onKind) {
@@ -805,7 +807,54 @@ function sellForm(d, onDone, onKind) {
   desc.addEventListener("input", drawCounter);
 
 
+  // Screenshots of the 1Fit membership card (up to 3): uploaded right away, the form keeps signed references.
+  // Only the admin sees them. What Tesseract reads off them (tariff, end date, freeze days) fills the empty fields.
+  const MAX_SHOTS = 3;
+  const file = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+  const shotRow = h("div", { class: "row" });
+  const shotCount = () => d.shots.reduce((n, s) => n + (s === "keep" ? d.keptShots : 1), 0);
+  const drawShot = (loading) => {
+    shotRow.classList.remove("invalid");
+    const n = shotCount();
+    shotRow.replaceChildren(
+      h("div", { class: "grow" }, h("div", null, "🔒 " + T("app.sell.shots", { n, max: MAX_SHOTS })),
+        h("div", { class: "small muted" }, loading ? T("app.sell.shot_loading")
+          : T((B.vars.shot_required ? "app.sell.shots_hint_required" : "app.sell.shots_hint") + (B.vars.ocr ? "" : "_plain")))),
+      loading ? "" : h("div", { class: "shot-btns" },
+        n ? h("button", { class: "btn small danger", type: "button", onclick: () => { d.shots = []; drawShot(); } }, T("app.sell.shot_remove")) : null,
+        n < MAX_SHOTS ? h("button", { class: "btn small", type: "button", onclick: () => file.click() }, T("app.sell.shot_add")) : null));
+  };
+  const applyRead = (read) => {
+    const filled = [];
+    if (read.tariff_days && !d.plan && B.limits.plans.includes(read.tariff_days)) {
+      d.plan = read.tariff_days; drawPlan(); filled.push(T("app.f.plan"));
+    }
+    if (read.end_date && !d.end_date) { d.end_date = date.value = read.end_date; filled.push(T("app.f.date")); }
+    if (read.start_date && !d.start_date) { d.start_date = start.value = read.start_date; filled.push(T("app.f.start")); }
+    if (read.freeze_days && !d.freeze) {
+      d.freeze = freeze.checked = true; d.freezeDays = freezeDays.value = String(read.freeze_days);
+      drawFreeze(); filled.push(T("app.f.freeze_short"));
+    }
+    if (filled.length) { guessLeft(); loadAdvice(); toast(T("app.sell.shot_filled", { fields: filled.join(", ") })); }
+  };
+  file.addEventListener("change", async () => {
+    const picked = [...file.files].slice(0, MAX_SHOTS - shotCount());
+    file.value = "";
+    for (const one of picked) {
+      drawShot(true);
+      try {
+        const body = new FormData();
+        body.append("file", one);
+        const res = await api("POST", "screenshot", body);
+        d.shots.push({ file_id: res.file_id, sig: res.sig });
+        if (res.read) applyRead(res.read);
+      } catch (err) { haptic("error"); toast(err.message); }
+    }
+    drawShot();
+  });
+
   const fields = {
+    screenshot: shotRow,
     kind: kindWrap,
     promo_code: field(T("app.f.code"), code, { hint: "🔒 " + T("app.sell.code_hint") }),
     city: field(T("app.f.city"), citySel),
@@ -859,13 +908,14 @@ function sellForm(d, onDone, onKind) {
     if (d.kind === "membership" && !d.plan) { showFieldError(fields, { field: "tariff_days", message: T("app.err.plan") }); return; }
     if (d.kind === "membership" && d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
     if (d.kind === "membership" && d.freeze && !Number(d.freezeDays)) { showFieldError(fields, { field: "freeze_days", message: T("app.err.freeze_days") }); return; }
+    if (B.vars.shot_required && !shotCount()) { shotRow.classList.add("invalid"); showFieldError(fields, { field: "screenshot", message: T("app.err.shot_required") }); return; }
     if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
     submit.disabled = true;
     const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null,
                    freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
                    kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
                    paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
-                   description: d.description, accepted_price: Number(d.price), screenshot: d.shot };
+                   description: d.description, accepted_price: Number(d.price), screenshots: d.shots };
     const send = () => (d.id ? api("PUT", "listings/" + d.id, body) : api("POST", "listings", body));
     try {
       let res;
@@ -885,6 +935,7 @@ function sellForm(d, onDone, onKind) {
     }
   } },
     d.id || !B.vars.promo_enabled ? null : h("div", { class: "card" }, fields.kind),
+    h("div", { class: "card" }, shotRow, file),
     h("div", { class: "card" }, fields.city, fields.tariff_days, fields.tariff, fields.end_date, fields.start_date, fields.promo_code),
     payCard,
     freezeCard,
@@ -894,7 +945,7 @@ function sellForm(d, onDone, onKind) {
     acceptRow,
     h("p", { class: "note" }, T("commission.note")),
     submit);
-  drawCounter(); drawKind();
+  drawCounter(); drawKind(); drawShot();
   return form;
 }
 

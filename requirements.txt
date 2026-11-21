@@ -1,3 +1,6 @@
 aiogram>=3.13,<4
 aiosqlite>=0.20
 python-dotenv>=1.0
+# Reading 1Fit screenshots (optional: without them, and without the tesseract program, screenshots are not read).
+pytesseract>=0.3.10
+Pillow>=10

@@ -1,6 +1,7 @@
 """«Sell a membership» wizard. Also used to edit an existing listing (re-moderation)."""
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 
 from aiogram import F, Router
@@ -9,8 +10,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from ...i18n import CITIES
+from ... import ocr
 from ...money import fmt_money
-from ...repo import LK, LS, RepoError, today_local
+from ...ocr import MAX_SCREENSHOTS
+from ...repo import LK, LS, Repo, RepoError, today_local
 from ...usage import payments_guess
 from ...validators import (
     TARIFF_PLANS,
@@ -38,6 +41,7 @@ from ..ui import (
     btn,
     commission_block,
     esc,
+    fmt_day,
     kb,
     left_text,
     listing_public,
@@ -195,8 +199,12 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
         skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
     elif step == "photo":
-        skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
-        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
+        await draft_update(state, screenshot_file_ids=[], screenshot_file_id=None)  # sent again from scratch
+        if ctx.cfg.screenshot_required:  # the admin checks the listing against it: no «Skip»
+            await message.answer(step_title(ctx, data, step) + ctx.t("sell.ask_photo_required"), reply_markup=_nav(ctx, step))
+        else:
+            skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
+            await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
     elif step == "name":
         extra = []
         u = ctx.user
@@ -322,6 +330,8 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
     )}
     draft["paid_in_full"] = None if listing["paid_in_full"] is None else bool(listing["paid_in_full"])
     draft["has_freeze"] = bool(listing["freeze_days"])
+    draft["screenshot_file_ids"] = Repo.screenshot_ids(listing)
+    draft["ocr"] = Repo.ocr_of(listing)
     await state.clear()
     await state.set_data({
         "mode": "edit",
@@ -667,14 +677,116 @@ async def on_desc_skip(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None
     await advance(call.message, state, ctx, "desc")
 
 
+async def read_screens(bot, file_ids: list[str]) -> dict:
+    """What Tesseract reads off the screenshots (end date, tariff, freeze days); {} when it is not installed."""
+    if not ocr.available():
+        return {}
+    reads = []
+    for file_id in file_ids:
+        try:
+            buf = await bot.download(file_id)
+            reads.append(await asyncio.to_thread(ocr.read_card, buf.getvalue(), today_local()))
+        except Exception:  # noqa: BLE001 — a picture that cannot be read only means no hint
+            reads.append({})
+    return ocr.merge(reads)
+
+
 @router.message(SellForm.photo, F.photo)
 async def on_photo(message: Message, state: FSMContext, ctx: Ctx) -> None:
-    await draft_update(state, screenshot_file_id=message.photo[-1].file_id)
+    """Up to 3 screenshots; an album arrives as several messages and is counted the same way."""
+    ids = list((await state.get_data()).get("draft", {}).get("screenshot_file_ids") or [])
+    if len(ids) >= MAX_SCREENSHOTS:
+        return
+    ids.append(message.photo[-1].file_id)
+    await draft_update(state, screenshot_file_ids=ids, screenshot_file_id=ids[0])
+    if len(ids) < MAX_SCREENSHOTS:
+        await message.answer(ctx.t("sell.shot_added", n=len(ids), max=MAX_SCREENSHOTS),
+                             reply_markup=kb([btn(ctx.t("sell.shots_done"), SellCb(action="shotsdone"))]))
+        return
+    await finish_screens(message, state, ctx)
+
+
+@router.callback_query(SellForm.photo, SellCb.filter(F.action == "shotsdone"))
+async def on_shots_done(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
+    if not (await state.get_data()).get("draft", {}).get("screenshot_file_ids"):
+        await call.answer(ctx.t("common.stale"), show_alert=True)
+        return
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await finish_screens(call.message, state, ctx)
+
+
+SCREEN_FIELDS = ("end_date", "tariff_days", "freeze_days")
+
+
+async def finish_screens(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    """Read the screenshots; when they say something else than the seller, offer to take their values."""
+    draft = (await state.get_data()).get("draft") or {}
+    read = await read_screens(message.bot, draft.get("screenshot_file_ids") or [])
+    await draft_update(state, ocr=read)
+    if _kind(await state.get_data()) == LK.MEMBERSHIP:
+        current = {**draft, "freeze_days": draft.get("freeze_days") or 0}
+        diff = [k for k in ocr.mismatches(read, current) if k in SCREEN_FIELDS]
+        if diff:
+            await state.update_data(screen_fix={k: read[k] for k in diff})
+            await message.answer(ctx.t("sell.screen_diff", lines=screen_lines(ctx, read, draft, diff)),
+                                 reply_markup=kb([btn(ctx.t("sell.screen_take"), SellCb(action="screentake"))],
+                                                 [btn(ctx.t("sell.screen_keep"), SellCb(action="screenkeep"))]))
+            return
     await advance(message, state, ctx, "photo")
+
+
+def screen_lines(ctx: Ctx, read: dict, draft: dict, keys: list[str]) -> str:
+    def show(key: str, value) -> str:
+        if value is None:
+            return "—"
+        if key == "end_date":
+            return fmt_day(ctx, value)
+        if key == "tariff_days":
+            return ctx.t(f"app.plan.short.{value}") if value in TARIFF_PLANS else str(value)
+        return ctx.t("app.freeze_row", days=value) if value else ctx.t("sell.freeze_no")
+    return "\n".join(ctx.t("sell.screen_line", field=ctx.t(f"sell.screen.{k}"), shot=show(k, read.get(k)),
+                           yours=show(k, draft.get(k))) for k in keys)
+
+
+@router.callback_query(SellForm.photo, SellCb.filter(F.action.in_({"screentake", "screenkeep"})))
+async def on_screen_fix(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
+    data = await state.get_data()
+    fix = data.get("screen_fix") or {}
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    if callback_data.action == "screentake" and fix:
+        draft = data.get("draft") or {}
+        plan = fix.get("tariff_days", draft.get("tariff_days"))
+        end = fix.get("end_date", draft.get("end_date"))
+        update = {}
+        try:  # take the screenshot's values only if they make sense together
+            if plan in TARIFF_PLANS and end:
+                check_plan_end(date.fromisoformat(end), today_local(), plan)
+                parse_end_date(date.fromisoformat(end).strftime("%d.%m.%Y"), today_local())
+                update.update(tariff_days=plan, end_date=end)
+                start = draft.get("start_date")
+                if start:
+                    try:
+                        check_plan_span(date.fromisoformat(start), date.fromisoformat(end), plan)
+                    except ValidationError:
+                        update["start_date"] = None
+        except ValidationError:
+            update = {}
+        if "freeze_days" in fix:
+            update.update(freeze_days=fix["freeze_days"], has_freeze=bool(fix["freeze_days"]))
+        if update:
+            await draft_update(state, **update)
+            await call.message.answer(ctx.t("sell.screen_taken"))
+    await state.update_data(screen_fix=None)
+    await advance(call.message, state, ctx, "photo")
 
 
 @router.message(SellForm.photo)
 async def on_photo_wrong(message: Message, ctx: Ctx) -> None:
+    if ctx.cfg.screenshot_required:
+        await message.answer(ctx.t("err.photo_required"), reply_markup=_nav(ctx, "photo"))
+        return
     await message.answer(ctx.t("err.bad_photo"), reply_markup=_nav(ctx, "photo", [
         [btn(ctx.t("common.skip"), SellCb(action="skip"))]
     ]))
@@ -682,6 +794,9 @@ async def on_photo_wrong(message: Message, ctx: Ctx) -> None:
 
 @router.callback_query(SellForm.photo, SellCb.filter(F.action == "skip"))
 async def on_photo_skip(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
+    if ctx.cfg.screenshot_required:  # an old «Skip» button
+        await call.answer(ctx.t("err.photo_required"), show_alert=True)
+        return
     await call.answer()
     await call.message.edit_reply_markup(reply_markup=None)
     await draft_update(state, screenshot_file_id=None)
@@ -781,6 +896,13 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
     draft = dict(data.get("draft") or {})
     if not data.get("accepted"):
         await call.answer(ctx.t("sell.need_accept"), show_alert=True)
+        return
+    if ctx.cfg.screenshot_required and not draft.get("screenshot_file_id"):
+        # Listed before the screenshot was required: ask for it first.
+        await call.answer()
+        await call.message.edit_reply_markup(reply_markup=None)
+        await state.update_data(single=True)
+        await ask(call.message, state, ctx, "photo")
         return
     if draft.get("kind") is None:
         await call.answer()
