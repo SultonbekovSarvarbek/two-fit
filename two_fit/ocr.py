@@ -20,19 +20,35 @@ log = logging.getLogger(__name__)
 MAX_SCREENSHOTS = 3
 WANTED_LANGS = ("rus", "uzb_cyrl", "uzb", "eng")
 
-_MONTHS = {  # Russian (genitive and nominative) and Uzbek Cyrillic month names -> month number
+_MONTHS = {  # Russian (genitive and nominative), Uzbek Cyrillic and English month names -> month number
     "январ": 1, "феврал": 2, "март": 3, "апрел": 4, "ма": 5, "июн": 6, "июл": 7, "август": 8,
     "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8,
+    "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    # Uzbek Latin
+    "yanvar": 1, "fevral": 2, "aprel": 4, "iyun": 6, "iyul": 7, "avgust": 8,
+    "sentyabr": 9, "oktyabr": 10, "noyabr": 11, "dekabr": 12,
 }
-_MONTH_RE = r"(январ\w*|феврал\w*|март\w*|апрел\w*|ма[йя]\w*|июн\w*|июл\w*|август\w*|сентябр\w*|октябр\w*|ноябр\w*|декабр\w*)"
-_WORD_DATE = re.compile(r"(\d{1,2})\s+" + _MONTH_RE + r"\s+(\d{4})", re.I)
+_EN_MONTH_RE = r"(jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)"
+# The real card (1Fit app in English): «until January 13, 2027»
+_EN_DATE = re.compile(_EN_MONTH_RE + r"\s+(\d{1,2}),?\s+(\d{4})", re.I)
+_EN_DATE_DAY_FIRST = re.compile(r"(\d{1,2})\s+" + _EN_MONTH_RE + r",?\s+(\d{4})", re.I)
+_MONTH_RE = (r"(январ\w*|феврал\w*|март\w*|апрел\w*|ма[йя]\w*|июн\w*|июл\w*|август\w*|сентябр\w*|октябр\w*|ноябр\w*"
+             r"|декабр\w*|yanvar\w*|fevral\w*|mart\w*|aprel\w*|may\w*|iyun\w*|iyul\w*|avgust\w*|sentyabr\w*"
+             r"|oktyabr\w*|noyabr\w*|dekabr\w*)")
+_WORD_DATE = re.compile(r"(\d{1,2})[\s-]+" + _MONTH_RE + r",?\s+(\d{4})", re.I)  # «13 января 2027», «13-yanvar, 2027»
 _NUM_DATE = re.compile(r"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{4}|\d{2})(?!\d)")
-_END_WORDS = re.compile(r"(до|действ|оконч|истека|гача|тугаш|амал)", re.I)
+_END_WORDS = re.compile(r"(до|действ|оконч|истека|гача|тугаш|амал|until|valid|expire|gacha|tugash|amal)", re.I)
+# «52 days left», «осталось 52 дня», «52 kun qoldi»: the end date when the date itself was not read
+_DAYS_LEFT = re.compile(r"(?<!\d)(\d{1,4})\s*(?:days?\s+left|дн\w*\s+остал|kun\s+qol|кун\s+қол)|остал\w*\s+(\d{1,4})\s*дн",
+                        re.I)
 _START_WORDS = re.compile(r"(\bс\b|начал|актив|купл|покупк|бошлан|фаол)", re.I)
-_PLAN = re.compile(r"(?<!\d)(6|12|24)\s*(месяц\w*|мес\.?|ой\w*)", re.I)
-_PLAN_DAYS = re.compile(r"(?<!\d)(180|365|730)\s*(дн\w*|кун\w*)", re.I)
-_FREEZE_LINE = re.compile(r"(заморо\w*|музлат\w*)", re.I)
-_DAYS = re.compile(r"(?<!\d)(\d{1,3})\s*(дн\w*|день|дня|кун\w*)", re.I)
+_PLAN = re.compile(r"(?<!\d)(6|12|24)\s*(месяц\w*|мес\.?|ой\w*|months?|oy\w*)", re.I)
+_PLAN_DAYS = re.compile(r"(?<!\d)(180|365|730)\s*(дн\w*|кун\w*|days?|kun\w*)", re.I)  # «for 365 days»
+_FREEZE_LINE = re.compile(r"(заморо\w*|музлат\w*|freez\w*|muzlat\w*)", re.I)
+_DAYS = re.compile(r"(?<!\d)(\d{1,3})\s*(дн\w*|день|дня|кун\w*|days?|kun\w*)", re.I)
+_FRACTION = re.compile(r"\d+\s*/\s*\d+")  # «100 / 100» of the Attendance tile next to Freezing
+_NUMBER = re.compile(r"(?<![\d.,])(\d{1,3})(?![\d.,])")
 
 PLAN_BY_MONTHS = {6: 180, 12: 365, 24: 730}
 
@@ -41,6 +57,10 @@ def _month(word: str) -> int | None:
     w = word.lower()
     if w.startswith("ма"):  # «мая», «май» — but not «март»
         return 3 if w.startswith("март") else 5
+    if w.startswith("mar"):  # English «March» / Uzbek «mart», not Russian «ма…»
+        return 3
+    if w.startswith("may"):
+        return 5
     for stem, n in _MONTHS.items():
         if w.startswith(stem):
             return n
@@ -55,7 +75,10 @@ def _dates(line: str) -> list[date]:
             found.append(date(year, int(m), int(d)))
         except ValueError:
             pass
-    for d, word, y in _WORD_DATE.findall(line):
+    triples = [(d, w, y) for d, w, y in _WORD_DATE.findall(line)]
+    triples += [(d, w, y) for w, d, y in _EN_DATE.findall(line)]
+    triples += [(d, w, y) for d, w, y in _EN_DATE_DAY_FIRST.findall(line)]
+    for d, word, y in triples:
         month = _month(word)
         if month:
             try:
@@ -89,6 +112,12 @@ def parse_card(text: str | None, today: date) -> dict[str, Any]:
         result["end_date"] = max(ends).isoformat()
     elif future:
         result["end_date"] = max(future).isoformat()
+    if "end_date" not in result:
+        m = _DAYS_LEFT.search(" ".join(lines))
+        if m:
+            left = int(m.group(1) or m.group(2))
+            if 0 < left <= 1000:
+                result["end_date"] = date.fromordinal(today.toordinal() + left).isoformat()
     past = [d for d in starts + others if d <= today]
     if starts and min(starts) <= today:
         result["start_date"] = min(starts).isoformat()
@@ -105,12 +134,18 @@ def parse_card(text: str | None, today: date) -> dict[str, Any]:
             result["tariff_days"] = int(m.group(1))
 
     for i, line in enumerate(lines):
-        if _FREEZE_LINE.search(line):
-            near = " ".join(lines[i:i + 2])  # «Заморозка» and «20 дней» may be on two lines
-            d = _DAYS.search(near)
-            if d and 0 < int(d.group(1)) <= 365:
-                result["freeze_days"] = int(d.group(1))
-                break
+        m = _FREEZE_LINE.search(line)
+        if not m:
+            continue
+        # «Freezing» / «18» / «days left» may be on separate lines, and two tiles side by side are read as one
+        # row («Attendance > Freezing >», «100 /100 18», «Perfect days left»): look after the word, without
+        # the attendance fraction.
+        after = _FRACTION.sub(" ", " ".join(lines[i:i + 4])[m.start() + len(m.group()):])
+        d = _DAYS.search(after)
+        n = int(d.group(1)) if d else next((int(x) for x in _NUMBER.findall(after) if 0 < int(x) <= 365), None)
+        if n and 0 < n <= 365:
+            result["freeze_days"] = n
+            break
     return result
 
 

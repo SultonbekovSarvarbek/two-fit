@@ -61,6 +61,8 @@ Two Fit — независимая площадка: не выкупает аб�
 
 ## Запуск
 
+Обновление уже работающего сервера — пошагово в [`deploy/UPDATE.md`](deploy/UPDATE.md).
+
 Нужен Python 3.11+.
 
 ```bash
@@ -153,9 +155,9 @@ Tesseract, со скриншотов читаются тариф, дата ок�
 сама, в боте продавцу предлагается взять данные со скриншота, а администратор в карточке модерации видит,
 что прочитано и что не совпадает с объявлением. Без Tesseract всё работает, просто без чтения.
 
-Установка на сервере (Ubuntu/Debian):
+Установка на сервере и проверка — пошагово в [`deploy/UPDATE.md`](deploy/UPDATE.md):
 
 ```bash
-sudo apt install tesseract-ocr tesseract-ocr-rus tesseract-ocr-uzb-cyrl
+sudo apt install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus tesseract-ocr-uzb tesseract-ocr-uzb-cyrl
 pip install -r requirements.txt   # pytesseract и Pillow
 ```

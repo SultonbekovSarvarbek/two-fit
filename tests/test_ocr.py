@@ -129,3 +129,56 @@ async def test_mini_app_reads_screenshots_and_keeps_up_to_three(h, monkeypatch):
         status, _ = await api.call("PUT", f"/api/listings/{made['id']}", SELLER, draft(screenshots=["keep"]))
         listing = await h.repo.get_listing(made["id"])
         assert status == 200 and len(h.repo.screenshot_ids(listing)) == 3 and h.repo.ocr_of(listing) == on_card
+
+
+# ------------------------------------------------------------------ the real 1Fit card (app in English)
+REAL_CARD_TWO_TILES = """17:00 LTE
+<
+Personal membership
+for 365 days
+52 days left until January 13, 2027
+Your visit limit will reset on November 27 at 00:00.
+More
+Bonus days >
+B 0 days
+Share the promo code and earn more days
+Attendance > Freezing >
+100 /100 18
+Perfect days left
+"""
+
+REAL_CARD_ONE_COLUMN = """Personal membership
+for 365 days
+52 days left
+until January 13, 2027
+Bonus days
+0 days
+Attendance
+100 / 100
+Perfect
+Freezing
+18
+days left
+"""
+
+
+@pytest.mark.parametrize("text", [REAL_CARD_TWO_TILES, REAL_CARD_ONE_COLUMN])
+def test_reads_the_real_english_card(text):
+    """The screenshot a seller sent: «for 365 days», «until January 13, 2027», «Freezing 18 days left»."""
+    assert parse_card(text, TODAY) == {"end_date": "2027-01-13", "tariff_days": 365, "freeze_days": 18}
+
+
+def test_bonus_days_and_the_visit_limit_are_not_taken_for_anything():
+    text = "Bonus days\n0 days\nYour visit limit will reset on November 27 at 00:00."
+    assert parse_card(text, TODAY) == {}
+
+
+def test_days_left_when_the_date_was_not_read():
+    text = "for 365 days\n52 days left\nFreezing\n18\ndays left"
+    assert parse_card(text, TODAY)["end_date"] == "2027-01-13"  # 22.11.2026 + 52 days
+    assert parse_card("осталось 52 дня", TODAY)["end_date"] == "2027-01-13"
+
+
+def test_reads_an_uzbek_latin_card():
+    text = "Shaxsiy abonement\n365 kunga\n13-yanvar, 2027 gacha\nMuzlatish\n18 kun qoldi"
+    assert parse_card(text, TODAY) == {"end_date": "2027-01-13", "tariff_days": 365, "freeze_days": 18}

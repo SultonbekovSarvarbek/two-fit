@@ -16,6 +16,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from . import ocr
 from .config import Config, load_config
 from .i18n import I18n
 from .price_watch import PriceWatcher, next_run
@@ -110,6 +111,7 @@ async def run() -> None:
         watch_task = asyncio.create_task(dp["price_watcher"].run())
     try:
         log.info("Two Fit bot started")
+        log.info("screenshot reading (Tesseract): %s", "on" if ocr.available() else "off")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         reprice_task.cancel()
