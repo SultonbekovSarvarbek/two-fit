@@ -30,7 +30,6 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     await h.send(uid, "➕ Абонемент сотиш")
     await h.click(uid, "sl:kind:membership")
     await h.click(uid, "sl:city:tashkent")
-    await h.send(uid, "Йиллик безлимит")
     await h.send(uid, END)
     await h.send(uid, START)
     await h.click(uid, "sl:pay:full")
@@ -99,7 +98,8 @@ async def test_full_happy_path(h):
     assert "Найдено: 1" in texts(cat)
     card = await h.click(BUYER, h.button(BUYER, "№1"))
     ct = texts(card)
-    assert "Объявление №1" in ct and "Ташкент" in ct and "Йиллик безлимит" in ct and "Қолган 7 ой" in ct
+    assert "Объявление №1" in ct and "Ташкент" in ct and "Қолган 7 ой" in ct
+    assert "⏳ Осталось: <b>7 мес.</b>" in ct and "Тариф" not in ct  # months left, not a misleading tariff name
     assert "Укажите оператору номер объявления" in ct
     assert "https://t.me/s_sarvar" in h.url_buttons(BUYER)
 
@@ -169,10 +169,8 @@ async def test_wizard_navigation_and_validation(h):
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:city:samarkand")
-    assert "Шаг 1/9" in texts(await h.click(SELLER, "sl:back:"))  # back to city
+    assert "Шаг 1/8" in texts(await h.click(SELLER, "sl:back:"))  # back to city
     await h.click(SELLER, "sl:city:samarkand")
-    assert "от 2 до 60" in texts(await h.send(SELLER, "x"))
-    await h.send(SELLER, "Годовой")
     assert "прошла" in texts(await h.send(SELLER, "01.01.2020"))
     await h.send(SELLER, END)
     tomorrow = (today_local() + timedelta(days=1)).strftime("%d.%m.%Y")
@@ -259,12 +257,11 @@ async def test_restart_keeps_language_data_and_wizard(tmp_path):
     await h1.send(SELLER, "➕ Абонемент сотиш")
     await h1.click(SELLER, "sl:kind:membership")
     await h1.click(SELLER, "sl:city:tashkent")
-    await h1.send(SELLER, "Йиллик")
     await h1.stop()
 
     h2 = await Harness(db).start()  # "restart"
     nxt = await h2.send(SELLER, END)  # wizard continues at the start-date step, in Uzbek
-    assert "4/9-қадам" in texts(nxt)
+    assert "3/8-қадам" in texts(nxt)
     welcome = await h2.send(SELLER, "/start")
     assert "Тилни танланг" not in texts(welcome) and "Эълон жойлаш — бепул" in texts(welcome)
     await h2.stop()
@@ -281,9 +278,8 @@ async def test_installment_wizard_and_card(h):
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:city:tashkent")
-    await h.send(SELLER, "Безлимит 12 месяцев")
     await h.send(SELLER, END)
-    assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:skip:"))
+    assert "Шаг 4/8" in texts(await h.click(SELLER, "sl:skip:"))
     assert "Выберите действие" in texts(await h.send(SELLER, "500000"))  # a button is expected here
     assert "в месяц" in texts(await h.click(SELLER, "sl:pay:installment"))
     assert "цифрами" in texts(await h.send(SELLER, "много"))
@@ -313,12 +309,11 @@ async def test_fully_paid_skips_installment_questions(h):
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:city:tashkent")
-    await h.send(SELLER, "Годовой")
     await h.send(SELLER, END)
     await h.click(SELLER, "sl:skip:")
     ask_price = texts(await h.click(SELLER, "sl:pay:full"))
-    assert "Шаг 6/9" in ask_price and "больше он ничего не доплачивает" in ask_price
-    assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:back:"))  # back skips the installment steps
+    assert "Шаг 5/8" in ask_price and "больше он ничего не доплачивает" in ask_price
+    assert "Шаг 4/8" in texts(await h.click(SELLER, "sl:back:"))  # back skips the installment steps
 
 
 async def test_promo_code_wizard(h):

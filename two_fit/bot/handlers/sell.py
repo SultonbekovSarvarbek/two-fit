@@ -56,11 +56,11 @@ STEPS = ["kind", "city", "tariff", "date", "start", "payment", "monthly", "left"
          "name", "phone"]
 INSTALLMENT_STEPS = ("monthly", "left")  # asked only when the membership is paid in installments
 MEMBERSHIP_ONLY = ("start", "payment", "monthly", "left")
-PROMO_ONLY = ("code",)
+PROMO_ONLY = ("tariff", "code")  # a membership has no tariff: «12 months» misled buyers
 STATE_OF = {s: getattr(SellForm, s) for s in STEPS}
 # Steps shown as «Step n/total»; the installment answers and the phone belong to the step before them.
 NUMBERED = {
-    LK.MEMBERSHIP: ["city", "tariff", "date", "start", "payment", "price", "desc", "photo", "name"],
+    LK.MEMBERSHIP: ["city", "date", "start", "payment", "price", "desc", "photo", "name"],
     LK.PROMO: ["city", "tariff", "date", "code", "price", "desc", "photo", "name"],
 }
 FIELDS = {  # field in «Change» menu -> first step to ask

@@ -378,3 +378,18 @@ def test_promo_code_parsing():
     for bad in ("", "ab", "two words", "x" * 41, "код!"):
         with pytest.raises(ValidationError):
             parse_promo_code(bad)
+
+
+def test_remaining_replaces_the_tariff():
+    from two_fit.usage import remaining
+    today = date(2026, 10, 28)
+    assert remaining("2027-05-28", today) == {"n": 7, "unit": "m"}
+    assert remaining("2026-12-12", today) == {"n": 45, "unit": "d"}
+    assert remaining("2026-10-01", today) == {"n": 0, "unit": "d"}  # already over: never negative
+
+
+async def test_membership_keeps_no_tariff(repo):
+    lid = await repo.create_listing(1, "ru", draft(tariff="Безлимит 12 месяцев"))
+    assert (await repo.get_listing(lid))["tariff"] == ""  # «12 months» misled buyers about what is left
+    with pytest.raises(RepoError):  # a promo code must say what it gives
+        await repo.create_listing(1, "ru", draft(kind="promo", promo_code="FIT-1", tariff=""))

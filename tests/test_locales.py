@@ -64,7 +64,7 @@ def test_every_key_used_in_code_exists():
         "status.": ["pending", "approved", "rejected", "withdrawn", "removed", "reserved", "sold", "expired"],
         "rstatus.": ["new", "selected", "completed", "cancelled", "closed"],
         "cstatus.": ["pending", "paid"],
-        "sell.field.": ["city", "tariff", "date", "start", "payment", "price", "desc", "photo", "contacts"],
+        "sell.field.": ["city", "date", "start", "payment", "price", "desc", "photo", "contacts"],
         "admin.err.": ["not_found", "bad_status", "already", "price_not_confirmed", "stale"],
         "err.": ["bad_tariff", "bad_date_format", "bad_date_past", "bad_date_far", "bad_price", "bad_desc_long",
                  "bad_contacts", "bad_photo", "bad_name", "bad_phone", "bad_start_future", "bad_start_order", "bad_monthly", "bad_payments_left"],

@@ -17,7 +17,7 @@ from aiogram.types import (
 from ..i18n import LANGS
 from ..money import fmt_money
 from ..repo import LS, TZ, Repo, today_local
-from ..usage import usage
+from ..usage import remaining, usage
 from .callbacks import NOOP, LangCb
 from .context import Ctx
 
@@ -135,6 +135,12 @@ def usage_line(ctx: Ctx, data: dict[str, Any]) -> str:
     )
 
 
+def left_text(ctx: Ctx, end_iso: str) -> str:
+    r = remaining(end_iso, today_local())
+    unit = ctx.t(f"app.unit.{r['unit']}")
+    return f"{r['n']} {unit}"
+
+
 def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—") -> str:
     """Public part of a listing: only what a buyer may see. Labels in the viewer's language,
     the seller's own words (tariff, description) as written."""
@@ -143,7 +149,8 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
         "card.body_promo" if promo else "card.body",
         id=listing_id,
         city=esc(ctx.i18n.city(ctx.lang, data["city"])),
-        tariff=esc(data["tariff"]),
+        tariff=esc(data.get("tariff") or ""),
+        left=left_text(ctx, data["end_date"]),
         date=fmt_day(ctx, data["end_date"]),
         usage="" if promo else usage_line(ctx, data),
         price=fmt_money(data["price"]),

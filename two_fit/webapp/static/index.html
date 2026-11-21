@@ -417,7 +417,7 @@ const splash = () => h("div", { class: "splash" }, logo(true), spinner());
 function listingRow(l, onclick, extra) {
   return h("button", { class: "card item", type: "button", onclick },
     h("div", { class: "main" },
-      h("div", { class: "title" }, l.tariff),
+      h("div", { class: "title" }, isPromo(l) ? l.tariff : leftText(l, "app.left_title")),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
       usageBar(l), extra || [promoBadge(l), priceBadge(l), " ", payBadge(l)]),
     h("div", { class: "price num" }, money(l.price), h("small", null, T("app.sum"))));
@@ -443,6 +443,8 @@ const priceBadge = (l) => h("span", { class: "badge ptype " + (l.price_negotiabl
 const installment = (l) => l.paid_in_full === false && l.monthly_payment && l.payments_left;
 const installmentVars = (l) => ({ monthly: money(l.monthly_payment), left: l.payments_left, total: money(l.monthly_payment * l.payments_left) });
 const isPromo = (l) => l.kind === "promo";
+// Months left instead of a tariff name: «12 months» made buyers think they got all 12.
+const leftText = (l, key) => T(key || "app.left", { n: l.left.n, unit: T("app.unit." + l.left.unit) });
 const promoBadge = (l) => isPromo(l) ? [h("span", { class: "badge ptype inst" }, "🎁 " + T("app.badge.promo")), " "] : null;
 const payBadge = (l) => installment(l) ? h("span", { class: "badge ptype inst" }, T("app.pay.installment_row", installmentVars(l))) : null;
 const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.negotiable") : "");
@@ -473,10 +475,13 @@ function catalogView(view, rev) {
   const more = c.items.length < c.total
     ? h("button", { class: "btn ghost", type: "button", onclick: (e) => busy(e.currentTarget, async () => { await fetchCatalog(false); render(); }) }, T("app.catalog.more"))
     : null;
-  // Sorted cheapest first, so the first card is the cheapest in the current city filter.
-  const rows = c.items.map((l, i) => {
+  // Sorted cheapest first. «Cheapest» compares memberships only: a promo code is a different thing
+  // and is naturally cheaper, so flagging it would mislead.
+  const memberships = c.items.filter((l) => !isPromo(l));
+  const best = memberships.length > 1 ? memberships[0] : null;
+  const rows = c.items.map((l) => {
     const row = listingRow(l, () => go({ name: "listing", id: l.id }));
-    return i === 0 && c.total > 1 ? h("div", { class: "best" }, row, cheapestFlag()) : row;
+    return l === best ? h("div", { class: "best" }, row, cheapestFlag()) : row;
   });
   return [head, chips, h("div", { class: "stack" }, rows, more)];
 }
@@ -484,7 +489,9 @@ function catalogView(view, rev) {
 function publicRows(l) {
   return h("div", { class: "card rows" },
     h("div", null, h("span", { class: "k" }, T("app.f.city")), h("span", { class: "v" }, city(l.city))),
-    h("div", null, h("span", { class: "k" }, T(isPromo(l) ? "app.f.what_promo" : "app.f.tariff")), h("span", { class: "v" }, l.tariff)),
+    isPromo(l)
+      ? h("div", null, h("span", { class: "k" }, T("app.f.what_promo")), h("span", { class: "v" }, l.tariff))
+      : h("div", null, h("span", { class: "k" }, T("app.f.time_left")), h("span", { class: "v num" }, leftText(l))),
     l.start_date ? h("div", null, h("span", { class: "k" }, T("app.f.start")), h("span", { class: "v num" }, dmy(l.start_date))) : null,
     h("div", null, h("span", { class: "k" }, T(isPromo(l) ? "app.f.date_promo" : "app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))),
     l.paid_in_full == null ? null : h("div", null, h("span", { class: "k" }, T("app.f.pay_short")),
@@ -582,7 +589,7 @@ function newDraft(l) {
     : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: null, code: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
 
-function sellForm(d, onDone) {
+function sellForm(d, onDone, onKind) {
   const L = B.limits;
   const bind = (el, key, clean) => { el.addEventListener("input", () => { d[key] = clean ? clean(el) : el.value; }); return el; };
 
@@ -591,7 +598,7 @@ function sellForm(d, onDone) {
     B.cities.map((c) => h("option", { value: c }, city(c)))), "city");
   citySel.value = d.city;
   citySel.addEventListener("change", () => { d.city = citySel.value; setError(fields.city, ""); });
-  const tariff = bind(h("input", { type: "text", maxLength: L.tariff_max, placeholder: T("app.sell.tariff_ph"), value: d.tariff }), "tariff");
+  const tariff = bind(h("input", { type: "text", maxLength: L.tariff_max, placeholder: T("app.sell.what_promo_ph"), value: d.tariff }), "tariff");
   const date = bind(h("input", { type: "date", min: L.date_min, max: L.date_max, value: d.end_date }), "end_date");
   date.addEventListener("change", () => { d.end_date = date.value; });
   const start = bind(h("input", { type: "date", min: L.start_min, max: L.start_max, value: d.start_date }), "start_date");
@@ -666,7 +673,7 @@ function sellForm(d, onDone) {
     kind: kindWrap,
     promo_code: field(T("app.f.code"), code, { hint: "🔒 " + T("app.sell.code_hint") }),
     city: field(T("app.f.city"), citySel),
-    tariff: field(T("app.f.tariff"), tariff),
+    tariff: field(T("app.f.what_promo"), tariff),
     end_date: field(T("app.f.date"), date),
     start_date: field(T("app.f.start"), start, { hint: T("app.sell.start_hint") }),
     payment: payWrap,
@@ -694,11 +701,11 @@ function sellForm(d, onDone) {
     fields.promo_code.hidden = !promo;
     fields.start_date.hidden = promo;
     payCard.hidden = promo;
-    label(fields.tariff).textContent = T(promo ? "app.f.what_promo" : "app.f.tariff");
-    tariff.placeholder = T(promo ? "app.sell.what_promo_ph" : "app.sell.tariff_ph");
+    fields.tariff.hidden = !promo;  // only a promo code says what it gives
     label(fields.end_date).textContent = T(promo ? "app.f.date_promo" : "app.f.date");
     acceptText.textContent = T("app.sell.accept", { percent: pct(d.kind) });
     drawPay(); drawCalc();
+    if (onKind) onKind(d.kind);
   };
   const submit = h("button", { class: "btn", type: "submit" }, T("app.sell.submit"));
   const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
@@ -708,7 +715,7 @@ function sellForm(d, onDone) {
     if (d.kind === "membership" && d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
     if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
     submit.disabled = true;
-    const body = { city: d.city, tariff: d.tariff, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
+    const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
                    kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
                    paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
                    description: d.description, name: d.name, phone: d.phone, accepted_price: Number(d.price), screenshot: d.shot };
@@ -745,8 +752,14 @@ function afterSubmit(id) {
 }
 function sellView() {
   if (!S.draft) S.draft = newDraft(null);
-  return [h("h1", null, T("app.sell.title")), h("p", { class: "note", style: "margin:0 4px 14px" }, T("app.sell.intro")),
-          sellForm(S.draft, afterSubmit)];
+  // The title and the commission line follow the choice: membership 10%, promo code 30%.
+  const title = h("h1"), intro = h("p", { class: "note", style: "margin:0 4px 14px" });
+  const onKind = (kind) => {
+    const key = kind === "promo" ? "promo" : kind === "membership" ? "membership" : "any";
+    title.textContent = T("app.sell.title_" + key);
+    intro.textContent = T("app.sell.intro_" + key);
+  };
+  return [title, intro, sellForm(S.draft, afterSubmit, onKind)];
 }
 function editView(view) {
   if (!view.draft) view.draft = newDraft(view.listing);

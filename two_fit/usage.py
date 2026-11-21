@@ -8,6 +8,15 @@ DAYS_PER_MONTH = 30.4375
 MONTHS_FROM_DAYS = 60  # shorter memberships are counted in days
 
 
+def remaining(end_iso: str, today: date) -> dict[str, Any]:
+    """What the buyer actually gets: «7 months» or «45 days» from today to the end date.
+    It replaces the tariff name: «12 months» made buyers think they got all 12."""
+    days = max((date.fromisoformat(end_iso) - today).days, 0)
+    if days >= MONTHS_FROM_DAYS:
+        return {"n": max(1, round(days / DAYS_PER_MONTH)), "unit": "m"}
+    return {"n": days, "unit": "d"}
+
+
 def usage(start_iso: str | None, end_iso: str, today: date) -> dict[str, Any] | None:
     if not start_iso:
         return None

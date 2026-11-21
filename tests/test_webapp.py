@@ -151,7 +151,6 @@ async def test_create_listing_goes_to_moderation_and_notifies_admin(h, api):
     ({"accepted_price": None}, "commission_not_accepted", "accept"),
     ({"accepted_price": 1_500_000}, "commission_not_accepted", "accept"),  # consent was for another price
     ({"city": "moscow"}, "bad_city", "city"),
-    ({"tariff": "x"}, "bad_tariff", "tariff"),
     ({"end_date": "2020-01-01"}, "bad_date_past", "end_date"),
     ({"end_date": "31.05.2027"}, "bad_date_format", "end_date"),
     ({"start_date": "2999-01-01"}, "bad_start_future", "start_date"),
@@ -201,7 +200,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     assert {c["code"]: c["count"] for c in cat["cities"]} == {"tashkent": 1, "samarkand": 1}
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
-                             "description", "paid_in_full", "monthly_payment", "payments_left", "kind"}
+                             "description", "paid_in_full", "monthly_payment", "payments_left", "kind", "left"}
         assert item["start_date"] is None and item["usage"] is None
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]
@@ -392,3 +391,16 @@ async def test_promo_code_listing(h, api):
     assert status == 200 and (await h.repo.get_listing(lid))["kind"] == "promo"
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
     assert boot["vars"]["promo_percent"] == 30 and "app.kind.promo" in boot["texts"]
+    for key in ("any", "membership", "promo"):  # the sell page title and intro follow the choice
+        assert f"app.sell.title_{key}" in boot["texts"] and f"app.sell.intro_{key}" in boot["texts"]
+
+
+async def test_membership_shows_months_left_not_a_tariff(h, api):
+    lid = await publish(h, api, tariff="Безлимит 12 месяцев")
+    _, card = await api.call("GET", f"/api/listings/{lid}", BUYER)
+    assert card["listing"]["tariff"] == "" and card["listing"]["left"]["unit"] == "m"
+    status, data = await api.call("POST", "/api/listings", SELLER,
+                                  draft(kind="promo", promo_code="FIT-1", tariff="x", paid_in_full=None))
+    assert status == 400 and data["field"] == "tariff"
+    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+    assert {"app.left", "app.left_title", "app.f.time_left"} <= set(boot["texts"])

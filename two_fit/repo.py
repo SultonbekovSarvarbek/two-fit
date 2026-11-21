@@ -301,7 +301,7 @@ class Repo:
 
     @staticmethod
     def _check_draft(draft: dict[str, Any]) -> None:
-        required = ("city", "tariff", "end_date", "price", "seller_name", "seller_phone")
+        required = ("city", "end_date", "price", "seller_name", "seller_phone")
         if any(draft.get(k) in (None, "") for k in required):
             raise RepoError("incomplete")
         if draft.get("commission_accepted_price") != draft["price"]:
@@ -311,7 +311,7 @@ class Repo:
         if kind not in LK.ALL:
             raise RepoError("incomplete")
         if kind == LK.PROMO:
-            if not draft.get("promo_code"):
+            if not draft.get("promo_code") or not draft.get("tariff"):  # tariff: what the promo code gives
                 raise RepoError("incomplete")
             return  # a promo code has no start date and no installments: they are not stored
         if draft.get("start_date") and draft["start_date"] >= draft["end_date"]:
@@ -322,6 +322,11 @@ class Repo:
             raise RepoError("incomplete")
         if not paid and not (draft.get("monthly_payment") and draft.get("payments_left")):
             raise RepoError("incomplete")
+
+    @staticmethod
+    def _tariff(draft: dict[str, Any]) -> str:
+        """Only a promo code says what it gives; a membership shows the months left instead of a tariff name."""
+        return draft.get("tariff") or "" if draft.get("kind") == LK.PROMO else ""
 
     @staticmethod
     def _kind_fields(draft: dict[str, Any]) -> tuple[Any, ...]:
@@ -347,7 +352,7 @@ class Repo:
                        status, created_at, updated_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    seller_id, lang, draft["city"], draft["tariff"], draft["end_date"], *self._kind_fields(draft),
+                    seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, ts, ts,
@@ -372,7 +377,7 @@ class Repo:
                        status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
                    WHERE id=?""",
                 (
-                    lang, draft["city"], draft["tariff"], draft["end_date"], *self._kind_fields(draft), draft["price"],
+                    lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft), draft["price"],
                     int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
                     draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, now_iso(), listing_id,

@@ -26,7 +26,7 @@ from ..bot.ui import btn, esc, kb
 from ..config import Config
 from ..i18n import CITIES, LANGS, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
-from ..usage import usage
+from ..usage import remaining, usage
 from ..validators import (
     DESC_MAX,
     MAX_YEARS_AHEAD,
@@ -76,6 +76,7 @@ def public_view(listing: dict[str, Any]) -> dict[str, Any]:
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["kind"] = listing["kind"]  # the promo code itself is never public
     view["usage"] = usage(listing["start_date"], listing["end_date"], today_local())
+    view["left"] = remaining(listing["end_date"], today_local())
     paid = listing["paid_in_full"]
     view["paid_in_full"] = None if paid is None else bool(paid)  # None: listed before the question existed
     view["monthly_payment"] = listing["monthly_payment"] if paid == 0 else None
@@ -318,7 +319,6 @@ class WebApp:
         raw_price = number("price")
         draft = {
             "city": city,
-            "tariff": self._field(ctx, "tariff", parse_tariff, body.get("tariff")),
             "end_date": self._field(ctx, "end_date", self._iso_date, body.get("end_date"), today_local()),
             "price": self._field(ctx, "price", parse_price, raw_price),
             "price_negotiable": body.get("price_negotiable") is True,
@@ -332,6 +332,7 @@ class WebApp:
             raise ApiError(400, "bad_kind", ctx.t("app.err.kind"), "kind")
         draft["kind"] = kind
         if kind == LK.PROMO:
+            draft["tariff"] = self._field(ctx, "tariff", parse_tariff, body.get("tariff"))  # what it gives
             draft["promo_code"] = self._field(ctx, "promo_code", parse_promo_code, body.get("promo_code"))
         else:
             self._membership_fields(ctx, body, draft, number)
