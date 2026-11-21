@@ -164,15 +164,18 @@ p { margin: 0; }
 .text { padding: 14px 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .callout { padding: 13px 16px; border-radius: 16px; background: var(--tint); font-size: 14.5px; line-height: 1.4; }
 .callout.bad { background: var(--bad-tint); }
+.card > .callout { margin: 0 12px 4px; }  /* a warning inside a card keeps the card's edges */
 /* price advice in the sell form and the per-month cost a buyer compares with 1Fit */
-.advice { display: grid; gap: 6px; }
-.advice .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.advice { display: grid; gap: 8px; padding: 14px 16px 16px; }
+.advice .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 4px; padding: 0; }
 .advice .label { font-size: 13px; color: var(--hint); }
 .advice .value { font-size: 20px; font-weight: 700; }
-.advice p { margin: 0; font-size: 13.5px; line-height: 1.4; color: var(--hint); }
-.month-cost { font-size: 12.5px; color: var(--hint); margin-top: 4px; }
-.hero .month-cost { font-size: 14px; margin-top: 8px; }
-.month-cost.warn { color: var(--danger); font-weight: 600; }
+.advice p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--text); opacity: 0.78; }
+/* The per-month comparison is the point of the card, so it gets the main text colour, not the faint hint:
+   on the lime price card the hint grey of the dark theme all but vanished. */
+.month-cost { font-size: 13px; font-weight: 500; color: var(--text); opacity: 0.82; margin-top: 6px; }
+.hero .month-cost { font-size: 14px; font-weight: 600; color: var(--ink); opacity: 1; margin-top: 10px; }
+.month-cost.warn { color: var(--danger); font-weight: 600; opacity: 1; }
 .hero .month-cost.warn { color: #8A1C12; }
 
 /* buttons */
@@ -691,7 +694,7 @@ function sellForm(d, onDone, onKind) {
   // Recommended price: asked from the server whenever the end date or the installments change.
   let advice = null, adviceReq = 0, adviceTimer;
   const adviceCard = h("div", { class: "card advice", hidden: true });
-  const priceWarn = h("div", { class: "callout bad", hidden: true });
+  const priceWarn = h("div", { class: "callout bad", hidden: true });  // inside the price card
   const drawAdviceCheck = () => {
     const p = Number(d.price);
     let text = "";
@@ -706,14 +709,14 @@ function sellForm(d, onDone, onKind) {
     if (!show) { drawAdviceCheck(); return; }
     const use = h("button", { class: "btn small", type: "button", onclick: () => { setPrice(String(advice.recommended)); haptic("success"); } },
       T("app.advice.use"));
-    adviceCard.replaceChildren(
+    adviceCard.replaceChildren(...[  // the DOM call would print absent parts as «null»: drop them
       h("div", { class: "label" }, "💡 " + T("app.advice.title")),
       h("div", { class: "row" }, h("div", { class: "value num" }, money(advice.recommended) + " " + T("app.sum")), use),
       advice.max
         ? h("p", null, T("app.advice.text", { month: money(advice.month), fit_month: money(advice.fit_month), saving: advice.saving }))
         : h("p", null, T("app.advice.heavy", { total: money(advice.installments) })),
       advice.max && advice.installments ? h("p", null, T("app.advice.installment", { total: money(advice.installments) })) : null,
-      advice.max ? h("p", null, T("app.advice.max", { max: money(advice.max) })) : null);
+      advice.max ? h("p", null, T("app.advice.max", { max: money(advice.max) })) : null].filter(Boolean));
     drawAdviceCheck();
   };
   const loadAdvice = () => {
