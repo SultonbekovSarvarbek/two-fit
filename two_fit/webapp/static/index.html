@@ -194,6 +194,10 @@ p { margin: 0; }
 .seg { display: flex; padding: 4px; gap: 4px; border-radius: 999px; }
 .seg button { flex: 1; text-align: center; padding: 10px; border-radius: 999px; }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.titlebar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 6px 0 16px; }
+.titlebar h1 { margin: 0; min-width: 0; }
+.seg.mini { flex: none; padding: 3px; gap: 2px; }
+.seg.mini button { flex: none; padding: 6px 12px; font-size: 13px; }
 .empty { text-align: center; color: var(--hint); padding: 56px 24px 24px; }
 .empty .logo { margin: 0 auto 22px; }
 .empty .btn { margin-top: 18px; }
@@ -394,11 +398,10 @@ async function fetchCatalog(reset) {
 
 function catalogView(view, rev) {
   const c = S.cat;
-  const head = h("h1", null, T("app.catalog.title"));
-  const lang = langSwitch();
+  const head = h("div", { class: "titlebar" }, h("h1", null, T("app.catalog.title")), langSwitch());
   if (!c.loaded) {
     load(rev, fetchCatalog(true), render);
-    return [head, lang, spinner()];
+    return [head, spinner()];
   }
   const pick = (code) => { c.city = code; c.loaded = false; render(); };
   const chips = c.cities.length > 1 || c.city ? h("div", { class: "chips" },
@@ -406,7 +409,7 @@ function catalogView(view, rev) {
     c.cities.map((x) => h("button", { class: "chip", type: "button", "aria-pressed": String(c.city === x.code), onclick: () => pick(x.code) },
       city(x.code), h("span", { class: "n num" }, x.count)))) : null;
   if (!c.items.length) {
-    return [head, lang, chips, h("div", { class: "empty" }, h("p", null, T("app.catalog.empty")), operatorBtn())];
+    return [head, chips, h("div", { class: "empty" }, h("p", null, T("app.catalog.empty")), operatorBtn())];
   }
   const more = c.items.length < c.total
     ? h("button", { class: "btn ghost", type: "button", onclick: (e) => busy(e.currentTarget, async () => { await fetchCatalog(false); render(); }) }, T("app.catalog.more"))
@@ -416,7 +419,7 @@ function catalogView(view, rev) {
     const row = listingRow(l, () => go({ name: "listing", id: l.id }));
     return i === 0 && c.total > 1 ? h("div", { class: "best" }, row, cheapestFlag()) : row;
   });
-  return [head, lang, chips, h("div", { class: "stack" }, rows, more)];
+  return [head, chips, h("div", { class: "stack" }, rows, more)];
 }
 
 function publicRows(l) {
@@ -683,8 +686,8 @@ function langSwitch() {
     document.documentElement.lang = B.lang;
     render();
   });
-  return h("div", { class: "card seg", style: "margin-bottom:14px", role: "group", "aria-label": T("app.more.lang") }, B.langs.map((x) =>
-    h("button", { type: "button", "aria-pressed": String(x.code === B.lang), onclick: (e) => setLang(x.code, e.currentTarget) }, x.name)));
+  return h("div", { class: "card seg mini", role: "group", "aria-label": T("app.more.lang") }, B.langs.map((x) =>
+    h("button", { type: "button", title: x.name, "aria-label": x.name, "aria-pressed": String(x.code === B.lang), onclick: (e) => setLang(x.code, e.currentTarget) }, x.code.toUpperCase())));
 }
 
 function moreView() {
