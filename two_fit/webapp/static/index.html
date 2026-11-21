@@ -209,13 +209,21 @@ p { margin: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 /* skeleton placeholders while data loads */
-.sk { display: block; height: 12px; border-radius: 6px; background: var(--line); animation: sk 1.2s ease-in-out infinite alternate; }
+.sk {
+  --sk-base: var(--line); --sk-glow: color-mix(in srgb, var(--card) 70%, transparent);
+  position: relative; overflow: hidden; display: block; height: 12px; border-radius: 6px; background: var(--sk-base);
+}
+.sk::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--sk-glow), transparent);
+  animation: sk 1.4s ease-in-out infinite;
+}
 .sk + .sk { margin-top: 8px; }
-.hero .sk { background: rgba(21, 21, 15, 0.14); }
+.hero .sk { --sk-base: rgba(21, 21, 15, 0.14); --sk-glow: rgba(255, 255, 255, 0.45); }
 .item.ghost { pointer-events: none; }
 .item.ghost .price { justify-content: center; align-items: flex-end; }
-@keyframes sk { from { opacity: 1; } to { opacity: 0.45; } }
-@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
+@keyframes sk { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .sk::after { animation: none; } }
 
 #tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: center;
