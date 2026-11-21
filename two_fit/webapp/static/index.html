@@ -177,7 +177,9 @@ p { margin: 0; }
 .advice .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 4px; padding: 0; }
 .advice .label { font-size: 13px; color: var(--hint); }
 .advice .value { font-size: 20px; font-weight: 700; }
-.advice p.giving { opacity: 1; font-weight: 600; }
+/* «📦 Вы отдаёте покупателю 53 дн. — до 13 января 2027»: what the price is for — the seller must notice it */
+.advice p.giving { opacity: 1; margin: 2px 0; padding: 11px 13px; border-radius: 13px; background: var(--lime);
+  color: var(--ink); font-size: 15px; font-weight: 700; line-height: 1.35; }
 .advice p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--text); opacity: 0.78; }
 /* The per-month comparison is the point of the card, so it gets the main text colour, not the faint hint:
    on the lime price card the hint grey of the dark theme all but vanished. */
@@ -800,7 +802,7 @@ function sellForm(d, onDone, onKind) {
     adviceCard.replaceChildren(...[
       h("div", { class: "label" }, "💰 " + T("app.sell.price_auto")),
       h("div", { class: "row" }, h("div", { class: "value num" }, money(advice.recommended) + " " + T("app.sum"))),
-      d.end_date ? h("p", { class: "giving" }, T("app.sell.giving", { left: leftFor(d.end_date), date: dmy(d.end_date) })) : null,
+      d.end_date ? h("p", { class: "giving num" }, "📦 " + T("app.sell.giving", { left: leftFor(d.end_date), date: dmy(d.end_date) })) : null,
       h("p", null, T("app.sell.price_auto_hint")),
       advice.max ? h("p", null, T("app.advice.text", { month: money(advice.month), fit_month: money(advice.fit_month), saving: advice.saving }))
         : h("p", null, T("app.advice.heavy", { total: money(advice.installments) })),
@@ -957,8 +959,8 @@ function sellForm(d, onDone, onKind) {
     const p = Number(d.price), f = fee(p, d.kind), membership = d.kind === "membership";
     return [
       membership ? [T("app.f.plan"), T("app.plan.short." + d.plan)] : [T("app.f.what_promo"), d.tariff],
-      d.end_date ? [membership ? T("app.confirm.giving") : T("app.f.date_promo"),
-        membership ? T("app.confirm.giving_v", { left: leftFor(d.end_date), date: dmy(d.end_date) }) : dmy(d.end_date)] : null,
+      d.end_date ? [membership ? "📦 " + T("app.confirm.giving") : T("app.f.date_promo"),
+        membership ? T("app.confirm.giving_v", { left: leftFor(d.end_date), date: dmy(d.end_date) }) : dmy(d.end_date), membership] : null,
       membership ? ["❄️ " + T("app.f.freeze_short"), d.freeze ? T("app.freeze_row", { days: d.freezeDays }) : T("app.confirm.none")] : null,
       membership ? [T("app.f.pay_short"), d.paid === false
         ? T("app.pay.installment_row", { monthly: money(d.monthly), left: d.left }) : T("app.pay.full_row")] : null,
