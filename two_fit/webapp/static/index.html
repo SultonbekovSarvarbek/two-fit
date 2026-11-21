@@ -208,6 +208,14 @@ p { margin: 0; }
 .spinner { width: 26px; height: 26px; margin: 64px auto; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--mark); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+/* skeleton placeholders while data loads */
+.sk { display: block; height: 12px; border-radius: 6px; background: var(--line); animation: sk 1.2s ease-in-out infinite alternate; }
+.sk + .sk { margin-top: 8px; }
+.hero .sk { background: rgba(21, 21, 15, 0.14); }
+.item.ghost { pointer-events: none; }
+.item.ghost .price { justify-content: center; align-items: flex-end; }
+@keyframes sk { from { opacity: 1; } to { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
 
 #tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: center;
@@ -366,6 +374,17 @@ function failed(err) {
     h("button", { class: "btn ghost", type: "button", onclick: render }, T("app.retry"))));
 }
 const spinner = () => h("div", { class: "spinner" });
+const bar = (w, hgt) => h("span", { class: "sk", style: "width:" + w + (hgt ? ";height:" + hgt : "") });
+// Placeholder list shaped like listingRow cards, shown until the first page arrives.
+const skeletonRows = (n = 4) => h("div", { class: "stack", "aria-busy": "true", "aria-label": T("app.loading") },
+  Array.from({ length: n }, (_, i) => h("div", { class: "card item ghost", "aria-hidden": "true" },
+    h("div", { class: "main" }, bar(["62%", "48%", "70%", "55%"][i % 4], "14px"), bar("40%"), bar("26%", "18px")),
+    h("div", { class: "price" }, bar("64px", "14px"), bar("32px")))));
+// Placeholder for the listing detail screen: price hero + rows card.
+const skeletonDetail = () => h("div", { "aria-busy": "true", "aria-label": T("app.loading") },
+  h("div", { class: "card hero", "aria-hidden": "true" }, bar("30%"), bar("55%", "28px")),
+  h("div", { class: "card rows", "aria-hidden": "true", style: "margin-top:12px" },
+    [0, 1, 2].map(() => h("div", null, bar("30%"), bar("35%")))));
 const logo = (big) => h("span", { class: big ? "logo big" : "logo", role: "img", "aria-label": "Two Fit" });
 const brand = () => h("header", { class: "brand" }, logo(), h("span", { class: "wordmark" }, "Two Fit"));
 const splash = () => h("div", { class: "splash" }, logo(true), spinner());
@@ -401,7 +420,7 @@ function catalogView(view, rev) {
   const head = h("div", { class: "titlebar" }, h("h1", null, T("app.catalog.title")), langSwitch());
   if (!c.loaded) {
     load(rev, fetchCatalog(true), render);
-    return [head, spinner()];
+    return [head, skeletonRows()];
   }
   const pick = (code) => { c.city = code; c.loaded = false; render(); };
   const chips = c.cities.length > 1 || c.city ? h("div", { class: "chips" },
@@ -441,7 +460,7 @@ function listingView(view, rev) {
       if (data.own) replace({ name: "mine", id: view.id, listing: data.listing });
       else { view.data = data; render(); }
     });
-    return spinner();
+    return skeletonDetail();
   }
   const l = view.data.listing;
   const action = view.data.requested
@@ -629,7 +648,7 @@ function myView(view, rev) {
   const head = h("h1", null, T("app.my.title"));
   if (!S.my) {
     load(rev, api("GET", "my"), (data) => { S.my = data.items; render(); });
-    return [head, spinner()];
+    return [head, skeletonRows(3)];
   }
   if (!S.my.length) {
     return [head, h("div", { class: "empty" }, h("p", null, T("app.my.empty")),
