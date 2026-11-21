@@ -1,7 +1,7 @@
 """Reading a 1Fit membership screenshot: the end date, the tariff and the freeze days left.
 
 Tesseract does the reading (``pytesseract`` + the ``tesseract`` program with the rus/uzb_cyrl languages).
-Without them nothing breaks: ``read_text`` returns ``None`` and the listing is checked by the admin's eyes only.
+Without them nothing breaks: ``read_words`` returns ``None`` and the listing is checked by the admin's eyes only.
 
 What is read is a hint, never the truth: the seller's form is filled with it (and can be corrected), and the
 admin sees where it differs from what the seller wrote.
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 from datetime import date
 from functools import lru_cache
@@ -47,7 +48,9 @@ _PLAN = re.compile(r"(?<!\d)(6|12|24)\s*(месяц\w*|мес\.?|ой\w*|months?
 _PLAN_DAYS = re.compile(r"(?<!\d)(180|365|730)\s*(дн\w*|кун\w*|days?|kun\w*)", re.I)  # «for 365 days»
 _FREEZE_LINE = re.compile(r"(заморо\w*|музлат\w*|freez\w*|muzlat\w*)", re.I)
 _DAYS = re.compile(r"(?<!\d)(\d{1,3})\s*(дн\w*|день|дня|кун\w*|days?|kun\w*)", re.I)
-_FRACTION = re.compile(r"\d+\s*/\s*\d+")  # «100 / 100» of the Attendance tile next to Freezing
+# «100 / 100» of the Attendance tile next to Freezing; Tesseract may read the slash as «|», «I», «l» or «\\»
+_FRACTION = re.compile(r"\d+\s*[/|Il\\]\s*\d+")
+_DAYS_WORD = re.compile(r"(дн\w*|день|дня|кун\w*|days?|kun\w*)", re.I)
 _NUMBER = re.compile(r"(?<![\d.,])(\d{1,3})(?![\d.,])")
 
 PLAN_BY_MONTHS = {6: 180, 12: 365, 24: 730}
@@ -141,8 +144,13 @@ def parse_card(text: str | None, today: date) -> dict[str, Any]:
         # row («Attendance > Freezing >», «100 /100 18», «Perfect days left»): look after the word, without
         # the attendance fraction.
         after = _FRACTION.sub(" ", " ".join(lines[i:i + 4])[m.start() + len(m.group()):])
-        d = _DAYS.search(after)
-        n = int(d.group(1)) if d else next((int(x) for x in _NUMBER.findall(after) if 0 < int(x) <= 365), None)
+        d = _DAYS.search(after)  # «18 days» written together
+        if d:
+            n = int(d.group(1))
+        else:  # «… 18 / Perfect days left»: the last number before the word «days»
+            w = _DAYS_WORD.search(after)
+            numbers = [int(x) for x in _NUMBER.findall(after[:w.start()] if w else after) if 0 < int(x) <= 365]
+            n = numbers[-1] if numbers else None
         if n and 0 < n <= 365:
             result["freeze_days"] = n
             break
@@ -184,29 +192,76 @@ def available() -> bool:
         return False
 
 
-def read_text(image: bytes) -> str | None:
-    """The text on a screenshot, or None when Tesseract is not installed or the picture is unreadable.
+def freeze_from_words(words: list[dict[str, Any]]) -> int | None:
+    """The freeze days by their place on the card: the number right under the word «Freezing», in its own tile.
+    The «100 / 100» of the Attendance tile beside it is to the left and never taken, however it is read."""
+    label = next((w for w in words if _FREEZE_LINE.fullmatch(w["text"].strip(" >:.,»«"))), None)
+    if not label:
+        return None
+    lx, ly, lw, lh = label["left"], label["top"], label["width"], max(label["height"], 1)
+    best = None
+    for w in words:
+        t = w["text"].strip(" >:.,")
+        if not t.isdigit() or not 0 < int(t) <= 365:
+            continue
+        cx = w["left"] + w["width"] / 2
+        below = w["top"] - (ly + lh)
+        if not (0 <= below <= 12 * lh and lx - 0.6 * lw <= cx <= lx + 2.5 * lw):
+            continue
+        if best is None or below < best[0]:
+            best = (below, int(t))
+    return best[1] if best else None
+
+
+def _prepare(image: bytes):
+    from PIL import Image, ImageOps
+    img = Image.open(io.BytesIO(image))
+    img = ImageOps.exif_transpose(img).convert("L")
+    if sum(img.getdata()) / (img.width * img.height) < 110:  # dark theme: white text on black
+        img = ImageOps.invert(img)
+    img = ImageOps.autocontrast(img)
+    if img.width < 1400:  # small phone screenshots read better enlarged
+        k = 1400 / img.width
+        img = img.resize((round(img.width * k), round(img.height * k)))
+    return img
+
+
+def read_words(image: bytes) -> tuple[str, list[dict[str, Any]]] | None:
+    """Tesseract's text (in lines) and every word with its box; None when it is not installed or fails.
     Blocking: call it through ``asyncio.to_thread``."""
     try:
         import pytesseract
-        from PIL import Image, ImageOps
     except ImportError:
         return None
     try:
-        img = Image.open(io.BytesIO(image))
-        img = ImageOps.exif_transpose(img).convert("L")
-        if sum(img.getdata()) / (img.width * img.height) < 110:  # dark theme: white text on black
-            img = ImageOps.invert(img)
-        img = ImageOps.autocontrast(img)
-        if img.width < 1400:  # small phone screenshots read better enlarged
-            k = 1400 / img.width
-            img = img.resize((round(img.width * k), round(img.height * k)))
+        img = _prepare(image)
         langs = [lang for lang in WANTED_LANGS if lang in set(pytesseract.get_languages(config=""))] or ["eng"]
-        return pytesseract.image_to_string(img, lang="+".join(langs))
+        data = pytesseract.image_to_data(img, lang="+".join(langs), output_type=pytesseract.Output.DICT)
     except Exception as e:  # noqa: BLE001 — a bad picture must not break selling
         log.warning("screenshot not read: %s", e)
         return None
+    words, lines, key = [], [], None
+    for i, text in enumerate(data["text"]):
+        if not text.strip():
+            continue
+        words.append({k: data[k][i] for k in ("left", "top", "width", "height")} | {"text": text})
+        line_key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        if line_key != key:
+            lines.append([])
+            key = line_key
+        lines[-1].append(text)
+    return "\n".join(" ".join(ln) for ln in lines), words
 
 
 def read_card(image: bytes, today: date) -> dict[str, Any]:
-    return parse_card(read_text(image), today)
+    got = read_words(image)
+    if not got:
+        return {}
+    text, words = got
+    if os.getenv("OCR_LOG"):  # OCR_LOG=1: see what Tesseract read, to tune the parser
+        log.info("screenshot text:\n%s", text)
+    result = parse_card(text, today)
+    freeze = freeze_from_words(words)  # the place on the card beats the order of the text
+    if freeze:
+        result["freeze_days"] = freeze
+    return result

@@ -182,3 +182,23 @@ def test_days_left_when_the_date_was_not_read():
 def test_reads_an_uzbek_latin_card():
     text = "Shaxsiy abonement\n365 kunga\n13-yanvar, 2027 gacha\nMuzlatish\n18 kun qoldi"
     assert parse_card(text, TODAY) == {"end_date": "2027-01-13", "tariff_days": 365, "freeze_days": 18}
+
+
+# ------------------------------------------------------------------ the server read «100» instead of «18»
+@pytest.mark.parametrize("row", ["100 | 100 18", "100 1100 18", "100 /100 18", "100 I 100 18"])
+def test_freeze_is_the_last_number_before_days_left(row):
+    text = f"Attendance > Freezing >\n{row}\nPerfect days left"
+    assert parse_card(text, TODAY)["freeze_days"] == 18
+
+
+def test_freeze_by_its_place_under_the_label():
+    """Word boxes as on the screenshot (684 px wide): «100» and «/100» are in the Attendance tile on the left."""
+    from two_fit.ocr import freeze_from_words
+
+    def w(text, left, top, width, height=28):
+        return {"text": text, "left": left, "top": top, "width": width, "height": height}
+    words = [w("Attendance", 66, 873, 162), w(">", 285, 873, 12), w("Freezing", 377, 875, 120), w(">", 596, 875, 12),
+             w("100", 66, 1040, 95, 44), w("/100", 170, 1052, 60), w("18", 378, 1043, 60, 44),
+             w("Perfect", 66, 1094, 104), w("days", 377, 1096, 52), w("left", 435, 1096, 44)]
+    assert freeze_from_words(words) == 18
+    assert freeze_from_words([w("Attendance", 66, 873, 162), w("100", 66, 1040, 95)]) is None  # no label
