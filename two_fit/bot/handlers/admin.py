@@ -83,7 +83,7 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
         status=status_label(ctx, listing),
         public=listing_public(ctx, listing, listing["id"]),
         name=esc(listing["seller_name"]),
-        phone=esc(listing["seller_phone"]),
+        phone=esc(listing["seller_phone"] or "—"),  # Mini App sellers are reached through Telegram
         tg=tg_ref(seller, listing["seller_id"]),
         lang=listing["lang"],
         created=fmt_dt(listing["created_at"]),
@@ -186,7 +186,8 @@ async def render_deals(ctx: Ctx, page: int) -> tuple[str, InlineKeyboardMarkup]:
 async def render_deal(ctx: Ctx, deal: dict) -> tuple[str, InlineKeyboardMarkup]:
     seller = await ctx.repo.get_user(deal["seller_id"])
     buyer = await ctx.repo.get_user(deal["buyer_id"]) if deal["buyer_id"] else None
-    seller_s = f'{esc(deal["seller_name"])}, {esc(deal["seller_phone"])}, {tg_ref(seller, deal["seller_id"])}'
+    seller_s = ", ".join(x for x in (esc(deal["seller_name"]), esc(deal["seller_phone"]),
+                                     tg_ref(seller, deal["seller_id"])) if x)
     buyer_s = (f'{esc(deal["buyer_name"])}, {esc(deal["buyer_phone"])}, {tg_ref(buyer, deal["buyer_id"])}'
                if deal["buyer_id"] else "—")
     text = ctx.t(

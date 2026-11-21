@@ -301,7 +301,7 @@ class Repo:
 
     @staticmethod
     def _check_draft(draft: dict[str, Any]) -> None:
-        required = ("city", "end_date", "price", "seller_name", "seller_phone")
+        required = ("city", "end_date", "price", "seller_name")  # the phone is optional: Telegram is enough
         if any(draft.get(k) in (None, "") for k in required):
             raise RepoError("incomplete")
         if draft.get("commission_accepted_price") != draft["price"]:
@@ -355,7 +355,7 @@ class Repo:
                     seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
-                    draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, ts, ts,
+                    draft["seller_name"], draft.get("seller_phone") or "", draft["price"], LS.PENDING, ts, ts,
                 ),
             )
             listing_id = cur.lastrowid
@@ -380,7 +380,7 @@ class Repo:
                     lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft), draft["price"],
                     int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", draft.get("screenshot_file_id"),
-                    draft["seller_name"], draft["seller_phone"], draft["price"], LS.PENDING, now_iso(), listing_id,
+                    draft["seller_name"], draft.get("seller_phone") or "", draft["price"], LS.PENDING, now_iso(), listing_id,
                 ),
             )
             await self._log(listing_id, seller_id, "edited", price=draft["price"])

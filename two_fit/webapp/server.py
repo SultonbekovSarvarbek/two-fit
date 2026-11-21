@@ -323,9 +323,8 @@ class WebApp:
             "price": self._field(ctx, "price", parse_price, raw_price),
             "price_negotiable": body.get("price_negotiable") is True,
             "description": self._field(ctx, "description", parse_description, body.get("description") or ""),
-            "seller_name": self._field(ctx, "name", parse_name, body.get("name")),
-            "seller_phone": self._field(ctx, "phone", normalize_phone, body.get("phone")),
         }
+        draft["seller_name"], draft["seller_phone"] = self._seller_contact(ctx, body, existing)
         # What is sold stays as it was listed; a new listing must say it.
         kind = existing["kind"] if existing else body.get("kind")
         if kind not in LK.ALL:
@@ -352,6 +351,18 @@ class WebApp:
         else:
             draft["screenshot_file_id"] = None
         return draft
+
+    def _seller_contact(self, ctx: Ctx, body: dict[str, Any], existing: dict[str, Any] | None) -> tuple[str, str]:
+        """The sell form no longer asks for a name and phone: the operator reaches the seller in Telegram.
+        Older app versions still send them, and then they are checked as before."""
+        if body.get("name") is not None or body.get("phone") is not None:
+            return (self._field(ctx, "name", parse_name, body.get("name")),
+                    self._field(ctx, "phone", normalize_phone, body.get("phone")))
+        if existing:
+            return existing["seller_name"], existing["seller_phone"]
+        u = ctx.user
+        name = (u.get("contact_name") or u.get("tg_name") or "").strip()[:60] or f"Telegram {ctx.user_id}"
+        return name, u.get("contact_phone") or ""
 
     def _membership_fields(self, ctx: Ctx, body: dict[str, Any], draft: dict[str, Any], number) -> None:
         """Start date and how the membership is paid: fully or in installments."""
@@ -398,7 +409,8 @@ class WebApp:
         ctx = request[CTX]
         draft = self._draft(ctx, await self._json(request))
         listing_id = await self.repo.create_listing(ctx.user_id, ctx.lang, draft)
-        await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
+        if draft["seller_phone"]:
+            await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
         await self._notify_admins(ctx, "admin.n.new_listing", listing_id)
         return web.json_response({"id": listing_id}, status=201)
 
@@ -417,7 +429,8 @@ class WebApp:
             await self.repo.update_listing_by_seller(listing_id, ctx.user_id, ctx.lang, draft)
         except RepoError:
             raise ApiError(409, "bad_status", ctx.t("sell.edit_blocked")) from None
-        await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
+        if draft["seller_phone"]:
+            await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
         await self._notify_admins(ctx, "admin.n.edited_listing", listing_id)
         return web.json_response({"id": listing_id})
 

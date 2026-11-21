@@ -404,3 +404,20 @@ async def test_membership_shows_months_left_not_a_tariff(h, api):
     assert status == 400 and data["field"] == "tariff"
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
     assert {"app.left", "app.left_title", "app.f.time_left"} <= set(boot["texts"])
+
+
+async def test_sell_form_needs_no_contacts(h, api):
+    body = draft()
+    del body["name"], body["phone"]
+    status, data = await api.call("POST", "/api/listings", SELLER, body)
+    assert status == 201, data
+    listing = await h.repo.get_listing(data["id"])
+    assert listing["seller_name"] == f"Name{SELLER}" and listing["seller_phone"] == ""  # from Telegram
+    assert (await h.repo.get_user(SELLER))["contact_phone"] is None  # nothing empty saved as a contact
+    # The admin card shows no phone, but the seller's Telegram to reach them.
+    from two_fit.bot.context import Ctx
+    from two_fit.bot.handlers.admin import render_card
+    text, _ = await render_card(Ctx(h.repo, I18n(), h.cfg, {"id": ADMIN, "lang": "ru"}), listing)
+    assert "📞 —" in text and f"@user{SELLER}" in text
+    status, _ = await api.call("PUT", f"/api/listings/{data['id']}", SELLER, body)
+    assert status == 200 and (await h.repo.get_listing(data["id"]))["seller_name"] == f"Name{SELLER}"
