@@ -19,7 +19,7 @@ def draft(price=2_000_000, **kw):
         "city": "tashkent", "tariff": "Годовой", "end_date": FUTURE, "price": price,
         "description": "Осталось 7 месяцев", "screenshot_file_id": "file-1",
         "seller_name": "Алишер", "seller_phone": "+998901112233", "commission_accepted_price": price,
-        "paid_in_full": True,
+        "paid_in_full": True, "tariff_days": 365,
     }
     d.update(kw)
     return d
@@ -315,7 +315,8 @@ async def test_old_database_gets_new_columns(tmp_path):
 
     from two_fit.repo import SCHEMA
     path = tmp_path / "old.db"
-    old_schema = "\n".join(l for l in SCHEMA.splitlines() if not any(c in l for c in ("price_negotiable", "start_date", "paid_in_full", "monthly_payment", "payments_left")))
+    old_schema = "\n".join(l for l in SCHEMA.splitlines() if not any(c in l for c in ("price_negotiable", "start_date", "paid_in_full", "monthly_payment", "payments_left",
+                                 "tariff_days")))
     async with aiosqlite.connect(path) as db:  # a database from before the column existed
         await db.executescript(old_schema)
     r = Repo(path, 10)

@@ -60,16 +60,17 @@ def buttons_of(m: TelegramMethod) -> list:
 
 
 class Harness:
-    def __init__(self, db_path, admin_ids=frozenset({900})):
+    def __init__(self, db_path, admin_ids=frozenset({900}), promo=True):
         self.cfg = Config(
             bot_token="42:TEST", admin_ids=frozenset(admin_ids), support_username="s_sarvar",
             db_path=db_path, commission_percent=10, page_size=5,
             welcome_image=db_path.parent / "missing.png", logo=db_path.parent / "missing-logo.png",
+            promo_enabled=promo,
         )
         self.update_id = itertools.count(1)
 
     async def start(self):
-        self.repo = Repo(self.cfg.db_path, self.cfg.commission_percent)
+        self.repo = Repo(self.cfg.db_path, self.cfg.commission_percent, promo_enabled=self.cfg.promo_enabled)
         await self.repo.connect()
         self.session = FakeSession()
         self.bot = Bot(self.cfg.bot_token, session=self.session, default=DefaultBotProperties(parse_mode="HTML"))

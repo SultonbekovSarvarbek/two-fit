@@ -1,7 +1,7 @@
 """How much of a membership is already used: «8 of 12 months», shown when the seller gave the start date."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 DAYS_PER_MONTH = 30.4375
@@ -17,7 +17,10 @@ def remaining(end_iso: str, today: date) -> dict[str, Any]:
     return {"n": days, "unit": "d"}
 
 
-def usage(start_iso: str | None, end_iso: str, today: date) -> dict[str, Any] | None:
+def usage(start_iso: str | None, end_iso: str, today: date, plan_days: int | None = None) -> dict[str, Any] | None:
+    """With no start date, the tariff gives it: a 12-month membership ending in May started a year before."""
+    if not start_iso and plan_days:
+        start_iso = (date.fromisoformat(end_iso) - timedelta(days=plan_days)).isoformat()
     if not start_iso:
         return None
     start, end = date.fromisoformat(start_iso), date.fromisoformat(end_iso)

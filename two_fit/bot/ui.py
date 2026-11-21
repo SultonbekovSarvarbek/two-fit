@@ -123,7 +123,7 @@ USAGE_BAR_CELLS = 10
 
 def usage_line(ctx: Ctx, data: dict[str, Any]) -> str:
     """«📊 Использовано 8 из 12 мес. · осталось 4 мес.» and a text progress bar; empty without a start date."""
-    u = usage(data.get("start_date"), data["end_date"], today_local())
+    u = usage(data.get("start_date"), data["end_date"], today_local(), data.get("tariff_days"))
     if not u:
         return ""
     unit = ctx.t(f"app.unit.{u['unit']}")
@@ -172,7 +172,7 @@ def price_advice(ctx: Ctx, data: dict[str, Any]) -> Advice | None:
     installment = data.get("paid_in_full") is False
     return advise(data["end_date"], today_local(), ctx.repo.fit_prices,
                   data.get("monthly_payment") if installment else None,
-                  data.get("payments_left") if installment else None)
+                  data.get("payments_left") if installment else None, plan_days=data.get("tariff_days"))
 
 
 def advice_text(ctx: Ctx, a: Advice) -> str:
@@ -189,6 +189,9 @@ def advice_text(ctx: Ctx, a: Advice) -> str:
 def month_line(ctx: Ctx, data: dict[str, Any]) -> str:
     """«≈ 459 000 сум/мес · у 1Fit 658 000 (−30%)» — the per-month cost the buyer compares with 1Fit."""
     a = price_advice(ctx, data)
+    if a and data.get("price") and a.suspicious(data["price"]):
+        # Not a 92% discount: almost surely the monthly price. Tell the buyer to check, never boast.
+        return ctx.t("card.suspicious")
     if not a or not data.get("price") or a.saving(data["price"]) <= 0:
         return ""
     return ctx.t("card.month", month=fmt_money(a.month_cost(data["price"])), fit_month=fmt_money(a.fit_month),

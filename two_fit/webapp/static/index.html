@@ -172,6 +172,8 @@ p { margin: 0; }
 .advice p { margin: 0; font-size: 13.5px; line-height: 1.4; color: var(--hint); }
 .month-cost { font-size: 12.5px; color: var(--hint); margin-top: 4px; }
 .hero .month-cost { font-size: 14px; margin-top: 8px; }
+.month-cost.warn { color: var(--danger); font-weight: 600; }
+.hero .month-cost.warn { color: #8A1C12; }
 
 /* buttons */
 .btn {
@@ -456,8 +458,12 @@ const leftText = (l, key) => T(key || "app.left", { n: l.left.n, unit: T("app.un
 const promoBadge = (l) => isPromo(l) ? [h("span", { class: "badge ptype inst" }, "🎁 " + T("app.badge.promo")), " "] : null;
 const payBadge = (l) => installment(l) ? h("span", { class: "badge ptype inst" }, T("app.pay.installment_row", installmentVars(l))) : null;
 // «≈ 459 000 сум/мес · у 1Fit 658 000 (−30%)»: buyers compare with 1Fit's monthly installments, not the total.
-const monthCost = (l) => l.month_cost ? h("div", { class: "month-cost num" },
-  T("app.month_cost", { month: money(l.month_cost.month), fit_month: money(l.month_cost.fit_month), saving: l.month_cost.saving })) : null;
+// A price far too low for the whole term («485 000 for 9 months») is flagged, never shown as a −92% bargain.
+const suspicious = (l) => !!(l.month_cost && l.month_cost.suspicious);
+const monthCost = (l) => !l.month_cost ? null
+  : suspicious(l) ? h("div", { class: "month-cost warn" }, T("app.month_suspicious"))
+  : h("div", { class: "month-cost num" },
+    T("app.month_cost", { month: money(l.month_cost.month), fit_month: money(l.month_cost.fit_month), saving: l.month_cost.saving }));
 const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.negotiable") : "");
 
 async function fetchCatalog(reset) {
@@ -488,7 +494,7 @@ function catalogView(view, rev) {
     : null;
   // Sorted cheapest first. «Cheapest» compares memberships only: a promo code is a different thing
   // and is naturally cheaper, so flagging it would mislead.
-  const memberships = c.items.filter((l) => !isPromo(l));
+  const memberships = c.items.filter((l) => !isPromo(l) && !suspicious(l));
   const best = memberships.length > 1 ? memberships[0] : null;
   const rows = c.items.map((l) => {
     const row = listingRow(l, () => go({ name: "listing", id: l.id }));
@@ -595,9 +601,9 @@ function buyView(view) {
 function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
-        kind: l.kind, code: l.promo_code || "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "",
+        kind: l.kind, code: l.promo_code || "", plan: l.tariff_days || null, paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "",
         name: l.seller_name, phone: l.seller_phone, shot: l.has_screenshot ? "keep" : null, accept: !l.rate_changed }  // shot: an earlier screenshot stays attached
-    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: null, code: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
+    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shot: null, accept: false };
 }
 
 function sellForm(d, onDone, onKind) {
@@ -625,6 +631,17 @@ function sellForm(d, onDone, onKind) {
   const kindWrap = h("div", { class: "field" }, h("span", null, T("app.f.kind")), kindSeg, kindErr);
   kindWrap.error = kindErr;
   const code = bind(h("input", { type: "text", maxLength: 40, autocomplete: "off", autocapitalize: "characters", spellcheck: false, value: d.code }), "code");
+
+  // The 1Fit tariff, picked from 1Fit's own: typed names like «12 months» made buyers think they got all 12.
+  const planErr = h("div", { class: "err", hidden: true });
+  const planSeg = h("div", { class: "seg", role: "group", "aria-label": T("app.f.plan") },
+    B.limits.plans.map((days) => h("button", { type: "button", "data-days": String(days), onclick: () => {
+      d.plan = days; setError(fields.tariff_days, ""); drawPlan(); loadAdvice();
+    } }, T("app.plan.short." + days))));
+  const planWrap = h("div", { class: "field" }, h("span", null, T("app.f.plan")), planSeg,
+    h("div", { class: "hint" }, T("app.sell.plan_hint")), planErr);
+  planWrap.error = planErr;
+  const drawPlan = () => planSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.plan === Number(b.dataset.days))));
 
   // Fully paid or installment: «9 months, 500 000» turned out to be 500 000 every month.
   const payErr = h("div", { class: "err", hidden: true });
@@ -705,7 +722,7 @@ function sellForm(d, onDone, onKind) {
       if (d.kind !== "membership" || !d.end_date || d.paid == null) { advice = null; drawAdvice(); return; }
       const req = ++adviceReq;
       try {
-        const res = await api("POST", "advice", { end_date: d.end_date, paid_in_full: d.paid,
+        const res = await api("POST", "advice", { end_date: d.end_date, paid_in_full: d.paid, tariff_days: d.plan,
           monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null });
         if (req === adviceReq) { advice = res.advice; drawAdvice(); }
       } catch (e) { /* no advice is fine: the form still works */ }
@@ -726,6 +743,7 @@ function sellForm(d, onDone, onKind) {
     kind: kindWrap,
     promo_code: field(T("app.f.code"), code, { hint: "🔒 " + T("app.sell.code_hint") }),
     city: field(T("app.f.city"), citySel),
+    tariff_days: planWrap,
     tariff: field(T("app.f.what_promo"), tariff),
     end_date: field(T("app.f.date"), date),
     start_date: field(T("app.f.start"), start, { hint: T("app.sell.start_hint") }),
@@ -751,6 +769,8 @@ function sellForm(d, onDone, onKind) {
     fields.kind.hidden = !!d.id;  // an existing listing keeps what it sells
     fields.promo_code.hidden = !promo;
     fields.start_date.hidden = promo;
+    fields.tariff_days.hidden = promo;
+    drawPlan();
     payCard.hidden = promo;
     fields.tariff.hidden = !promo;  // only a promo code says what it gives
     label(fields.end_date).textContent = T(promo ? "app.f.date_promo" : "app.f.date");
@@ -763,15 +783,25 @@ function sellForm(d, onDone, onKind) {
     e.preventDefault();
     if (submit.disabled) return;
     if (!d.kind) { showFieldError(fields, { field: "kind", message: T("app.err.kind") }); return; }
+    if (d.kind === "membership" && !d.plan) { showFieldError(fields, { field: "tariff_days", message: T("app.err.plan") }); return; }
     if (d.kind === "membership" && d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
     if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
     submit.disabled = true;
-    const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
+    const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
                    kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
                    paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
                    description: d.description, accepted_price: Number(d.price), screenshot: d.shot };
+    const send = () => (d.id ? api("PUT", "listings/" + d.id, body) : api("POST", "listings", body));
     try {
-      const res = d.id ? await api("PUT", "listings/" + d.id, body) : await api("POST", "listings", body);
+      let res;
+      try {
+        res = await send();
+      } catch (err) {
+        // «485 000 for 9 months»: the server asks whether that is really the price of the whole term.
+        if (err.code !== "price_suspicious" || !(await ask(err.message))) throw err;
+        body.low_price_ok = true;
+        res = await send();
+      }
       haptic("success");
       onDone(res.id);
     } catch (err) {
@@ -779,8 +809,8 @@ function sellForm(d, onDone, onKind) {
       showFieldError(fields, err);
     }
   } },
-    d.id ? null : h("div", { class: "card" }, fields.kind),
-    h("div", { class: "card" }, fields.city, fields.tariff, fields.end_date, fields.start_date, fields.promo_code),
+    d.id || !B.vars.promo_enabled ? null : h("div", { class: "card" }, fields.kind),
+    h("div", { class: "card" }, fields.city, fields.tariff_days, fields.tariff, fields.end_date, fields.start_date, fields.promo_code),
     payCard,
     adviceCard,
     h("div", { class: "card" }, fields.price, priceWarn, negotiableRow), calc,

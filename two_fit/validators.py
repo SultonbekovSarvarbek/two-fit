@@ -7,6 +7,9 @@ from datetime import date
 PRICE_MIN = 10_000
 PRICE_MAX = 100_000_000
 PAYMENTS_LEFT_MAX = 60  # monthly installment payments still to make
+# 1Fit's standard tariffs in Tashkent, in days: 6, 12 and 24 months. The seller picks one instead of typing a name.
+TARIFF_PLANS = (180, 365, 730)
+PLAN_FREEZE_DAYS = 90  # freezes push the end date past the tariff length; more than this is a mistake
 DESC_MAX = 500
 TARIFF_MIN, TARIFF_MAX = 2, 60
 NAME_MIN, NAME_MAX = 2, 60
@@ -86,6 +89,12 @@ def parse_price(text: str | None) -> int:
     if not PRICE_MIN <= value <= PRICE_MAX:
         raise ValidationError("bad_price")
     return value
+
+
+def check_plan_end(end: date, today: date, plan_days: int | None) -> None:
+    """A 12-month tariff cannot have 20 months left: either the date or the tariff is wrong."""
+    if plan_days and (end - today).days > plan_days + PLAN_FREEZE_DAYS:
+        raise ValidationError("bad_end_for_plan")
 
 
 def parse_monthly(text: str | None) -> int:

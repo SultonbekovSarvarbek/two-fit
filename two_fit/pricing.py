@@ -22,6 +22,7 @@ DEFAULT_FIT_PRICES: dict[int, int] = {90: 4_890_000, 180: 5_890_000, 365: 7_890_
 DISCOUNT_PERCENT = 30  # how much cheaper than 1Fit we advise to sell
 MAX_PERCENT = 85       # a seller may not ask more than this share of the 1Fit value: it would not sell
 MIN_PERCENT = 40       # below this the seller is warned (a typo or a giveaway)
+SUSPICIOUS_PERCENT = 25  # below this it is almost surely the price of one month, not of the whole term
 ROUND_TO = 10_000      # advised prices are rounded down to 10 000 so'm
 
 
@@ -51,6 +52,11 @@ class Advice:
     def too_low(self, price: int) -> bool:
         return price < self.min_price
 
+    def suspicious(self, price: int) -> bool:
+        """«485 000 for 9 months» next to 5 800 000 at 1Fit: almost surely the monthly price, not the total.
+        Buyers are told to check it with the operator instead of seeing it as a 92% discount."""
+        return price + self.installments < self.fit_value * SUSPICIOUS_PERCENT / 100
+
 
 def _round_down(amount: float) -> int:
     return int(amount // ROUND_TO * ROUND_TO)
@@ -67,14 +73,16 @@ def normalize_prices(prices: dict | None) -> dict[int, int]:
 
 def advise(end_iso: str, today: date, fit_prices: dict[int, int] | None = None,
            monthly_payment: int | None = None, payments_left: int | None = None,
-           discount: int = DISCOUNT_PERCENT, max_percent: int = MAX_PERCENT) -> Advice | None:
-    """Advice for a membership that ends on ``end_iso``; ``None`` if it has already ended."""
+           discount: int = DISCOUNT_PERCENT, max_percent: int = MAX_PERCENT,
+           plan_days: int | None = None) -> Advice | None:
+    """Advice for a membership that ends on ``end_iso``; ``None`` if it has already ended.
+    ``plan_days``: the 1Fit tariff the seller bought; without it, the cheapest one that covers the days left."""
     days_left = (date.fromisoformat(end_iso) - today).days
     if days_left <= 0:
         return None
     prices = normalize_prices(fit_prices)
     plans = sorted(prices)
-    base_days = next((d for d in plans if d >= days_left), plans[-1])
+    base_days = plan_days if plan_days in prices else next((d for d in plans if d >= days_left), plans[-1])
     base_price = prices[base_days]
     fit_value = days_left / base_days * base_price
     installments = (monthly_payment or 0) * (payments_left or 0) if monthly_payment and payments_left else 0

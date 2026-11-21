@@ -15,6 +15,7 @@ import aiosqlite
 
 from .money import calc_commission
 from .pricing import normalize_prices
+from .validators import TARIFF_PLANS
 
 # Uzbekistan has no DST: UTC+5 all year round.
 TZ = timezone(timedelta(hours=5))
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS listings (
     paid_in_full              INTEGER,            -- 1: fully paid, 0: installment, NULL: not asked (old listings)
     monthly_payment           INTEGER,            -- installment: what the buyer keeps paying every month
     payments_left             INTEGER,            -- installment: how many of those payments are left
+    tariff_days               INTEGER,            -- membership: the 1Fit tariff, 180 / 365 / 730 days; NULL on old listings
     description               TEXT NOT NULL DEFAULT '',
     screenshot_file_id        TEXT,
     seller_name               TEXT NOT NULL,
@@ -192,10 +194,12 @@ def _row(row: aiosqlite.Row | None) -> dict[str, Any] | None:
 
 
 class Repo:
-    def __init__(self, db_path: str | Path, commission_percent: int = 15, promo_commission_percent: int = 30):
+    def __init__(self, db_path: str | Path, commission_percent: int = 15, promo_commission_percent: int = 30,
+                 promo_enabled: bool = True):
         self.db_path = str(db_path)
         self.commission_percent = commission_percent
         self.promo_commission_percent = promo_commission_percent
+        self.promo_enabled = promo_enabled  # off: promo code listings are hidden from the catalog and not for sale
         self._db: aiosqlite.Connection | None = None
         # 1Fit prices used for the price advice; read from the database on connect, updated by the price watcher.
         self.fit_prices: dict[int, int] = normalize_prices(None)
@@ -228,6 +232,8 @@ class Repo:
             await self.db.execute("ALTER TABLE listings ADD COLUMN kind TEXT NOT NULL DEFAULT 'membership'")
         if "promo_code" not in columns:
             await self.db.execute("ALTER TABLE listings ADD COLUMN promo_code TEXT")
+        if "tariff_days" not in columns:
+            await self.db.execute("ALTER TABLE listings ADD COLUMN tariff_days INTEGER")
         if "commission_percent" not in columns:
             # Listings made before the rate was stored were accepted at 10% (membership) and 30% (promo code).
             await self.db.execute("ALTER TABLE listings ADD COLUMN commission_percent INTEGER")
@@ -318,7 +324,8 @@ class Repo:
 
     def is_available(self, listing: dict[str, Any] | None, today: date | None = None) -> bool:
         """Visible in the catalog and open for purchase requests."""
-        return bool(listing) and listing["status"] == LS.APPROVED and not self.is_expired(listing, today)
+        return (bool(listing) and listing["status"] == LS.APPROVED and not self.is_expired(listing, today)
+                and (self.promo_enabled or listing["kind"] != LK.PROMO))
 
     def percent_for(self, kind: str | None) -> int:
         """Today's rate: 15% for a membership, 30% for a promo code (both from the settings)."""
@@ -345,6 +352,8 @@ class Repo:
             return  # a promo code has no start date and no installments: they are not stored
         if draft.get("start_date") and draft["start_date"] >= draft["end_date"]:
             raise RepoError("bad_start")
+        if draft.get("tariff_days") not in TARIFF_PLANS:  # 6, 12 or 24 months: picked, not typed
+            raise RepoError("incomplete")
         # Fully paid or installment must be stated: «9 months, 500 000» meant 500 000 every month.
         paid = draft.get("paid_in_full")
         if paid not in (True, False, 0, 1):
@@ -359,10 +368,10 @@ class Repo:
 
     @staticmethod
     def _kind_fields(draft: dict[str, Any]) -> tuple[Any, ...]:
-        """kind, promo_code, start_date, paid_in_full, monthly_payment, payments_left — by what is sold."""
+        """kind, promo_code, tariff_days, start_date, paid_in_full, monthly_payment, payments_left — by what is sold."""
         if draft.get("kind") == LK.PROMO:
-            return LK.PROMO, draft["promo_code"], None, None, None, None
-        return (LK.MEMBERSHIP, None, draft.get("start_date"), *Repo._payment(draft))
+            return LK.PROMO, draft["promo_code"], None, None, None, None, None
+        return (LK.MEMBERSHIP, None, draft["tariff_days"], draft.get("start_date"), *Repo._payment(draft))
 
     @staticmethod
     def _payment(draft: dict[str, Any]) -> tuple[int, int | None, int | None]:
@@ -375,11 +384,11 @@ class Repo:
         async with self.tx():
             ts = now_iso()
             cur = await self.db.execute(
-                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, kind, promo_code, start_date,
+                """INSERT INTO listings(seller_id, lang, city, tariff, end_date, kind, promo_code, tariff_days, start_date,
                        paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
                        commission_percent, status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
@@ -401,7 +410,7 @@ class Repo:
             if listing["status"] not in LS.SELLER_EDITABLE:
                 raise RepoError("bad_status")
             await self.db.execute(
-                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, start_date=?,
+                """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, tariff_days=?, start_date=?,
                        paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?, commission_percent=?,
                        status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
@@ -458,7 +467,7 @@ class Repo:
     async def catalog(self, city: str | None, limit: int, offset: int,
                       today: date | None = None) -> tuple[list[dict[str, Any]], int]:
         params: dict[str, Any] = {"st": LS.APPROVED, "today": (today or today_local()).isoformat()}
-        where = "status=:st AND end_date>=:today"
+        where = "status=:st AND end_date>=:today" + self._kind_filter()
         if city:
             where += " AND city=:city"
             params["city"] = city
@@ -469,10 +478,13 @@ class Repo:
         )
         return rows, total
 
+    def _kind_filter(self) -> str:
+        return "" if self.promo_enabled else f" AND kind != '{LK.PROMO}'"
+
     async def catalog_cities(self, today: date | None = None) -> list[tuple[str, int]]:
         rows = await self._all(
-            """SELECT city, COUNT(*) AS n FROM listings WHERE status=? AND end_date>=?
-               GROUP BY city ORDER BY n DESC, city""",
+'SELECT city, COUNT(*) AS n FROM listings WHERE status=? AND end_date>=?' + self._kind_filter()
+            + " GROUP BY city ORDER BY n DESC, city",
             (LS.APPROVED, (today or today_local()).isoformat()),
         )
         return [(r["city"], r["n"]) for r in rows]

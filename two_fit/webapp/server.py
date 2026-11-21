@@ -38,7 +38,9 @@ from ..validators import (
     PRICE_MAX,
     PRICE_MIN,
     TARIFF_MAX,
+    TARIFF_PLANS,
     ValidationError,
+    check_plan_end,
     normalize_phone,
     parse_description,
     parse_end_date,
@@ -72,13 +74,17 @@ class ApiError(Exception):
 
 
 # ------------------------------------------------------------------ serializers
-def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> dict[str, int] | None:
-    """What the buyer pays per month of use next to what 1Fit charges; None when it is not cheaper."""
+def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> dict[str, Any] | None:
+    """What the buyer pays per month of use next to what 1Fit charges; None when it is not cheaper.
+    A price far too low to be the whole term is flagged ``suspicious`` instead of shown as a discount."""
     if listing["kind"] == LK.PROMO:
         return None
     installment = listing["paid_in_full"] == 0
     a = advise(listing["end_date"], today_local(), fit_prices,
-               listing["monthly_payment"] if installment else None, listing["payments_left"] if installment else None)
+               listing["monthly_payment"] if installment else None, listing["payments_left"] if installment else None,
+               plan_days=listing["tariff_days"])
+    if a and a.suspicious(listing["price"]):
+        return {"suspicious": True}
     if not a or a.saving(listing["price"]) <= 0:
         return None
     return {"month": a.month_cost(listing["price"]), "fit_month": a.fit_month, "saving": a.saving(listing["price"])}
@@ -89,7 +95,8 @@ def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = Non
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["kind"] = listing["kind"]  # the promo code itself is never public
-    view["usage"] = usage(listing["start_date"], listing["end_date"], today_local())
+    view["tariff_days"] = listing["tariff_days"]  # 180 / 365 / 730, None on old listings
+    view["usage"] = usage(listing["start_date"], listing["end_date"], today_local(), listing["tariff_days"])
     view["left"] = remaining(listing["end_date"], today_local())
     paid = listing["paid_in_full"]
     view["paid_in_full"] = None if paid is None else bool(paid)  # None: listed before the question existed
@@ -226,7 +233,8 @@ class WebApp:
             "langs": [{"code": code, "name": self.i18n.t(code, f"lang.{code}")} for code in LANGS],
             "texts": texts,
             "vars": {"operator": self.cfg.operator, "percent": self.cfg.commission_percent,
-                     "promo_percent": self.cfg.promo_commission_percent},
+                     "promo_percent": self.cfg.promo_commission_percent, "fees": ctx.fees(),
+                     "promo_enabled": self.cfg.promo_enabled},
             "support_url": self.cfg.support_url,
             "cities": list(CITIES),
             "user": {"name": ctx.user.get("contact_name") or "", "phone": ctx.user.get("contact_phone") or ""},
@@ -235,7 +243,7 @@ class WebApp:
                 "tariff_max": TARIFF_MAX, "name_max": NAME_MAX,
                 "date_min": today.isoformat(), "date_max": f"{today.year + MAX_YEARS_AHEAD}-12-31",
                 "start_min": f"{today.year - MAX_YEARS_BACK}-01-01", "start_max": today.isoformat(),
-                "payments_left_max": PAYMENTS_LEFT_MAX,
+                "payments_left_max": PAYMENTS_LEFT_MAX, "plans": list(TARIFF_PLANS),
             },
         }
 
@@ -344,7 +352,7 @@ class WebApp:
         draft["seller_name"], draft["seller_phone"] = self._seller_contact(ctx, body, existing)
         # What is sold stays as it was listed; a new listing must say it.
         kind = existing["kind"] if existing else body.get("kind")
-        if kind not in LK.ALL:
+        if kind not in LK.ALL or (kind == LK.PROMO and not existing and not self.cfg.promo_enabled):
             raise ApiError(400, "bad_kind", ctx.t("app.err.kind"), "kind")
         draft["kind"] = kind
         if kind == LK.PROMO:
@@ -356,6 +364,11 @@ class WebApp:
         if a and a.too_high(draft["price"]):
             raise ApiError(400, "price_too_high", ctx.t("err.price_too_high", max=fmt_money(a.max_price),
                                                         price=fmt_money(a.recommended)), "price")
+        if a and a.suspicious(draft["price"]) and body.get("low_price_ok") is not True:
+            # «485 000 for 9 months» is almost surely the monthly price: the seller confirms it first.
+            raise ApiError(400, "price_suspicious", ctx.t(
+                "app.err.price_suspicious", price=fmt_money(draft["price"]), month=fmt_money(a.month_cost(draft["price"])),
+                fit_month=fmt_money(a.fit_month)), "price")
         # The seller ticks the consent for one exact price; a different price means no consent.
         if body.get("accepted_price") != draft["price"]:
             raise ApiError(400, "commission_not_accepted", ctx.t("app.err.accept"), "accept")
@@ -386,7 +399,15 @@ class WebApp:
         return name, u.get("contact_phone") or ""
 
     def _membership_fields(self, ctx: Ctx, body: dict[str, Any], draft: dict[str, Any], number) -> None:
-        """Start date and how the membership is paid: fully or in installments."""
+        """The 1Fit tariff, the start date and how the membership is paid: fully or in installments."""
+        plan = body.get("tariff_days")
+        if plan not in TARIFF_PLANS or isinstance(plan, bool):
+            raise ApiError(400, "bad_plan", ctx.t("app.err.plan"), "tariff_days")
+        draft["tariff_days"] = plan
+        try:
+            check_plan_end(date.fromisoformat(draft["end_date"]), today_local(), plan)
+        except ValidationError as e:
+            raise ApiError(400, e.code, ctx.t(f"err.{e.code}"), "end_date") from None
         draft["start_date"] = self._field(ctx, "start_date", self._iso_start, body.get("start_date") or "",
                                           today_local(), draft["end_date"])
         paid = body.get("paid_in_full")
@@ -406,7 +427,9 @@ class WebApp:
             end = self._iso_date(body.get("end_date"), today_local())
         except ValidationError:
             return web.json_response({"advice": None})
-        draft: dict[str, Any] = {"kind": LK.MEMBERSHIP, "end_date": end, "paid_in_full": body.get("paid_in_full") is not False}
+        plan = body.get("tariff_days")
+        draft: dict[str, Any] = {"kind": LK.MEMBERSHIP, "end_date": end, "paid_in_full": body.get("paid_in_full") is not False,
+                                 "tariff_days": plan if plan in TARIFF_PLANS else None}
         if not draft["paid_in_full"]:
             try:
                 draft["monthly_payment"] = parse_monthly(str(body.get("monthly_payment") or ""))

@@ -35,10 +35,17 @@ class Ctx:
             "operator": self.cfg.operator,
             "percent": self.cfg.commission_percent,
             "promo_percent": self.cfg.promo_commission_percent,
+            "fees": self.fees(),
             "min": fmt_money(PRICE_MIN),
             "max": fmt_money(PRICE_MAX),
         }
         return self.i18n.t(self.lang, key, **{**defaults, **kwargs})
+
+    def fees(self) -> str:
+        """«15%» — or «15% for a membership, 30% for a promo code» while promo codes are on sale."""
+        key = "fees.both" if self.cfg.promo_enabled else "fees.membership"
+        return self.i18n.t(self.lang, key, percent=self.cfg.commission_percent,
+                           promo_percent=self.cfg.promo_commission_percent)
 
     def percent(self, kind: str | None = None) -> int:
         """Today's rate: 15% for a membership, 30% for a promo code."""

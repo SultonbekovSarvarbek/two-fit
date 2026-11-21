@@ -77,7 +77,7 @@ async def run() -> None:
         if not path.exists():
             log.warning("image not found: %s (the bot works without it)", path)
 
-    repo = Repo(cfg.db_path, cfg.commission_percent, cfg.promo_commission_percent)
+    repo = Repo(cfg.db_path, cfg.commission_percent, cfg.promo_commission_percent, promo_enabled=cfg.promo_enabled)
     await repo.connect()
     i18n = I18n()
     bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True))

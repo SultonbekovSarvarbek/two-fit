@@ -86,6 +86,7 @@ async def walk_to_price(h, days=200):
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:city:tashkent")
+    await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, (today_local() + timedelta(days=days)).strftime("%d.%m.%Y"))
     await h.click(SELLER, "sl:skip:")
     return await h.click(SELLER, "sl:pay:full")
@@ -109,7 +110,9 @@ async def test_bot_refuses_a_price_dearer_than_1fit(h):
     assert "не купят" in refused
     data = await h.dp.storage.get_data(key=_key(h))
     assert "price" not in data["draft"]
-    ok = texts(await h.send(SELLER, "500 000"))  # far below: allowed, with a warning
+    low = texts(await h.send(SELLER, "500 000"))  # 500 000 for 200 days: most likely the monthly price
+    assert "Проверьте цену" in low and "один месяц" in low
+    ok = texts(await h.click(SELLER, "sl:lowok:500000"))  # the seller confirms: allowed, with a warning
     assert "намного дешевле" in ok
 
 
@@ -241,3 +244,57 @@ async def test_admin_prices_screen_and_check_now(h):
     assert "совпадают" in texts(checked)
     assert "Цены 1Fit" not in texts(await h.send(SELLER, "/prices"))  # admins only
     assert w.fails == 0
+
+
+# ------------------------------------------------------------------ tariff picked from a list, suspicious prices
+def test_monthly_price_for_the_whole_term_is_suspicious():
+    a = advise(end_in(270), TODAY, plan_days=365)  # 9 months left of a 12-month tariff
+    assert a.base_days == 365
+    assert a.suspicious(485_000)            # the screenshot: «485 000 for 9 months» is one month's price
+    assert not a.suspicious(a.recommended)  # a real price for 9 months is not
+    assert not a.suspicious(2_000_000)      # a big discount, but plausible for the whole term
+
+
+def test_usage_comes_from_the_tariff_without_a_start_date():
+    from two_fit.usage import usage
+    u = usage(None, end_in(270), TODAY, 365)
+    assert (u["used"], u["total"], u["unit"]) == (3, 12, "m")
+    assert usage(None, end_in(270), TODAY) is None  # no tariff, no start date: nothing to show
+
+
+def test_end_date_must_fit_the_tariff():
+    from two_fit.validators import ValidationError, check_plan_end
+    check_plan_end(TODAY + timedelta(days=365 + 90), TODAY, 365)  # a 12-month tariff plus freezes
+    with pytest.raises(ValidationError):
+        check_plan_end(TODAY + timedelta(days=365 + 91), TODAY, 365)
+    with pytest.raises(ValidationError):
+        check_plan_end(TODAY + timedelta(days=300), TODAY, 180)  # 10 months left on a 6-month tariff
+
+
+async def test_api_needs_a_tariff_and_asks_about_a_suspicious_price(h, api):  # noqa: F811
+    status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=None))
+    assert (status, err["field"]) == (400, "tariff_days")
+    status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=180, end_date=(
+        today_local() + timedelta(days=400)).isoformat()))
+    assert (status, err["error"], err["field"]) == (400, "bad_end_for_plan", "end_date")
+
+    low = dict(price="485 000", accepted_price=485_000)
+    status, err = await api.call("POST", "/api/listings", SELLER, draft(**low))
+    assert (status, err["error"], err["field"]) == (400, "price_suspicious", "price") and "один месяц" in err["message"]
+    status, made = await api.call("POST", "/api/listings", SELLER, draft(**low, low_price_ok=True))
+    assert status == 201
+    await h.repo.approve(made["id"], ADMIN)
+    _, cat = await api.call("GET", "/api/catalog", SELLER)
+    assert cat["items"][0]["month_cost"] == {"suspicious": True}  # flagged, not a «−92%» bargain
+
+
+async def test_bot_card_flags_a_suspicious_price(h):
+    await walk_to_price(h)
+    await h.send(SELLER, "300 000")
+    await h.click(SELLER, "sl:lowok:300000")
+    await h.click(SELLER, "sl:skip:")
+    await h.click(SELLER, "sl:skip:")
+    await h.send(SELLER, "Алишер")
+    preview = texts(await h.send(SELLER, contact="+998901112233"))
+    assert "Очень низкая цена" in preview and "сум/мес</b> · у 1Fit" not in preview
+    assert "Использовано" in preview  # the 12-month tariff gives «used … of 12 months» without a start date

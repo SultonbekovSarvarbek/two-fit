@@ -14,7 +14,7 @@ from two_fit.i18n import I18n
 from two_fit.repo import LS, today_local
 from two_fit.webapp.server import create_webapp
 
-from .harness import Harness, text_of
+from .harness import Harness, text_of, texts
 
 SELLER, BUYER, STRANGER, ADMIN = 1, 2, 3, 900
 END = (today_local() + timedelta(days=200)).isoformat()
@@ -61,7 +61,7 @@ def draft(**over):
     body = {"city": "tashkent", "tariff": "Безлимит 12 месяцев", "end_date": END, "price": "2 000 000",
             "description": "Осталось 7 месяцев", "name": "Алишер", "phone": "+998 90 111 22 33",
             "accepted_price": 2_000_000, "screenshot": None, "paid_in_full": True,
-            "kind": "membership"}
+            "kind": "membership", "tariff_days": 365}
     body.update(over)
     return body
 
@@ -113,7 +113,7 @@ async def test_bootstrap_language_and_switch(h, api):
 async def test_catalog_is_sorted_cheapest_first(h, api):
     mid = await publish(h, api, price="2 000 000", accepted_price=2_000_000)
     high = await publish(h, api, price="3 500 000", accepted_price=3_500_000)
-    low = await publish(h, api, price="900 000", accepted_price=900_000)
+    low = await publish(h, api, price="1 500 000", accepted_price=1_500_000)
     _, cat = await api.call("GET", "/api/catalog", BUYER)
     assert [x["id"] for x in cat["items"]] == [low, mid, high]
 
@@ -194,15 +194,16 @@ async def test_screenshot_upload_and_use(h, api):
 # ------------------------------------------------------------------ catalog and buying
 async def test_catalog_shows_only_public_fields(h, api):
     lid = await publish(h, api)
-    await publish(h, api, uid=STRANGER, city="samarkand", price="900000", accepted_price=900_000)
+    await publish(h, api, uid=STRANGER, city="samarkand", price="1500000", accepted_price=1_500_000)
     status, cat = await api.call("GET", "/api/catalog", BUYER)
     assert status == 200 and cat["total"] == 2
     assert {c["code"]: c["count"] for c in cat["cities"]} == {"tashkent": 1, "samarkand": 1}
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
                              "description", "paid_in_full", "monthly_payment", "payments_left", "kind", "left",
-                             "month_cost"}
-        assert item["start_date"] is None and item["usage"] is None
+                             "month_cost", "tariff_days"}
+        # No start date, but the 12-month tariff gives it: «used 5 of 12 months» still shows.
+        assert item["start_date"] is None and item["tariff_days"] == 365 and item["usage"]["total"] == 12
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]
 
@@ -448,4 +449,46 @@ async def test_only_1fit_cities_are_offered(h, api):
 
 def repo_draft():
     return {"tariff": "", "end_date": END, "price": 2_000_000, "commission_accepted_price": 2_000_000,
-            "seller_name": "A", "seller_phone": "", "paid_in_full": True, "kind": "membership"}
+            "seller_name": "A", "seller_phone": "", "paid_in_full": True, "kind": "membership", "tariff_days": 365}
+
+
+async def test_promo_codes_hidden_by_default(tmp_path):
+    """PROMO_ENABLED is off by default: no promo code to sell, none in the catalog, no «30%» in the texts."""
+    from two_fit.config import Config
+    assert Config.__dataclass_fields__["promo_enabled"].default is False
+
+    h = await Harness(tmp_path / "hidden.db", promo=False).start()
+    try:
+        app = create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"])
+        async with TestClient(TestServer(app)) as client:
+            api = Api(client, h.cfg.bot_token)
+            _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+            assert boot["vars"]["promo_enabled"] is False and boot["vars"]["fees"] == "10%"
+            assert "промокод" not in T(boot, "app.how.6")
+            promo = dict(kind="promo", promo_code="FIT-1", tariff="Безлимит на 1 месяц", price="100 000",
+                         accepted_price=100_000, paid_in_full=None, tariff_days=None)
+            status, err = await api.call("POST", "/api/listings", SELLER, draft(**promo))
+            assert (status, err["field"]) == (400, "kind")
+            # A promo code listed while selling them was on: hidden from the catalog and not for sale.
+            old = await h.repo.create_listing(SELLER, "ru", {**repo_draft(), **promo, "city": "tashkent", "tariff": "1 месяц",
+                                                             "price": 100_000, "commission_accepted_price": 100_000})
+            await h.repo.approve(old, ADMIN)
+            member = await publish(h, api)
+            _, cat = await api.call("GET", "/api/catalog", BUYER)
+            assert [i["id"] for i in cat["items"]] == [member]
+            status, _ = await api.call("GET", f"/api/listings/{old}", BUYER)
+            assert status == 404
+
+        # The bot goes straight to the city: no «membership or promo code?» question.
+        await h.send(SELLER, "/start")
+        await h.click(SELLER, "lang:ru")
+        first = texts(await h.send(SELLER, "➕ Продать абонемент"))
+        assert "Шаг 1/9" in first and "Что вы продаёте" not in first and "промокод" not in first
+        assert "промокод" not in texts(await h.send(SELLER, "ℹ️ Как это работает"))
+    finally:
+        await h.stop()
+
+
+def T(boot, key):
+    import re
+    return re.sub(r"\{(\w+)\}", lambda m: str(boot["vars"].get(m.group(1), "")), boot["texts"][key])
