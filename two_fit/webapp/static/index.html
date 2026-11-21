@@ -248,6 +248,14 @@ p { margin: 0; }
 .spinner { width: 26px; height: 26px; margin: 64px auto; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--mark); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+/* Full-screen «uploading the screenshot…»: the page waits, nothing can be tapped meanwhile */
+.overlay { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 6px; padding: 24px; text-align: center; background: rgba(21, 21, 15, 0.72);
+  color: #F2EEE3; backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.overlay .spinner { margin: 0 auto 14px; width: 40px; height: 40px; border-color: rgba(242, 238, 227, 0.25);
+  border-top-color: var(--lime); }
+.overlay .title { font-size: 17px; font-weight: 700; }
+.overlay .sub { font-size: 14px; opacity: 0.8; max-width: 280px; }
 /* skeleton placeholders while data loads */
 .sk {
   --sk-base: var(--line); --sk-glow: color-mix(in srgb, var(--card) 70%, transparent);
@@ -424,6 +432,16 @@ function failed(err) {
     h("button", { class: "btn ghost", type: "button", onclick: render }, T("app.retry"))));
 }
 const spinner = () => h("div", { class: "spinner" });
+// A full-screen wait with a title and a line under it; returns a function that removes it.
+function overlay(title, sub) {
+  const box = h("div", { class: "overlay", role: "alert", "aria-busy": "true" },
+    spinner(), h("div", { class: "title" }, title), sub ? h("div", { class: "sub" }, sub) : null);
+  document.body.append(box);
+  return {
+    set: (t, s) => { box.querySelector(".title").textContent = t; const el = box.querySelector(".sub"); if (el && s) el.textContent = s; },
+    close: () => box.remove(),
+  };
+}
 const bar = (w, hgt) => h("span", { class: "sk", style: "width:" + w + (hgt ? ";height:" + hgt : "") });
 // Placeholder list shaped like listingRow cards, shown until the first page arrives.
 const skeletonRows = (n = 4) => h("div", { class: "stack", "aria-busy": "true", "aria-label": T("app.loading") },
@@ -840,17 +858,25 @@ function sellForm(d, onDone, onKind) {
   file.addEventListener("change", async () => {
     const picked = [...file.files].slice(0, MAX_SHOTS - shotCount());
     file.value = "";
-    for (const one of picked) {
-      drawShot(true);
-      try {
-        const body = new FormData();
-        body.append("file", one);
-        const res = await api("POST", "screenshot", body);
-        d.shots.push({ file_id: res.file_id, sig: res.sig });
-        if (res.read) applyRead(res.read);
-      } catch (err) { haptic("error"); toast(err.message); }
+    if (!picked.length) return;
+    const sub = T(B.vars.ocr ? "app.sell.shot_wait_read" : "app.sell.shot_wait_plain");
+    const wait = overlay(T("app.sell.shot_wait", { n: 1, total: picked.length }), sub);
+    drawShot(true);
+    try {
+      for (const [i, one] of picked.entries()) {
+        wait.set(T("app.sell.shot_wait", { n: i + 1, total: picked.length }), sub);
+        try {
+          const body = new FormData();
+          body.append("file", one);
+          const res = await api("POST", "screenshot", body);
+          d.shots.push({ file_id: res.file_id, sig: res.sig });
+          if (res.read) applyRead(res.read);
+        } catch (err) { haptic("error"); toast(err.message); }
+      }
+    } finally {
+      wait.close();
+      drawShot();
     }
-    drawShot();
   });
 
   const fields = {
