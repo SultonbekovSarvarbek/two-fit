@@ -92,6 +92,13 @@ def screen_check(ctx: Ctx, listing: dict) -> list[str]:
         parts.append(ctx.t("sell.screen.freeze_days") + " " + ctx.t("app.freeze_row", days=read["freeze_days"]))
     if read.get("start_date"):
         parts.append(ctx.t("app.f.start").lower() + " " + fmt_date(read["start_date"]))
+    if read.get("installment"):
+        parts.append(ctx.t("admin.card.ocr_contract",
+                           total=fmt_money(read["contract_total"]) if read.get("contract_total") else "—",
+                           date=fmt_date(read["contract_date"]) if read.get("contract_date") else "—"))
+    if read.get("payments_left"):
+        parts.append(ctx.t("admin.card.ocr_payments", monthly=fmt_money(read.get("monthly_payment") or 0),
+                           left=read["payments_left"]))
     lines = [ctx.t("admin.card.ocr", read=" · ".join(parts))]
     diff = ocr.mismatches(read, {**listing, "freeze_days": listing["freeze_days"] or 0})
     if diff:

@@ -55,6 +55,47 @@ _NUMBER = re.compile(r"(?<![\d.,])(\d{1,3})(?![\d.,])")
 
 PLAN_BY_MONTHS = {6: 180, 12: 365, 24: 730}
 
+# The installment contract and its payment schedule are screenshots too, but not of the membership card:
+# «Контракт · ПОКУПКА В 1Fit · 6 400 000 сум · Заявка №690984 от 12.08.2026 · График платежей».
+# Their dates are the purchase and the payment days — never the membership's start and end
+# (listing #21 got «действует до 01.08.2027» from the last payment).
+_CONTRACT = re.compile(r"(контракт|заявк\w*\s*№|график\s+платеж|покупка\s+в\s+1\s*fit|платеж\w*\s+по\s+график"
+                       r"|shartnoma|to'?lov\w*\s+jadval|шартнома|тўлов\w*\s+жадвал|payment\s+schedule)", re.I)
+_MONEY = re.compile(r"(?<![\d.,])(\d{1,3}(?:[ \u00a0]\d{3})+|\d{4,9})(?:[.,]\d{2})?\s*(?:сум|сўм|so['ʻ’]?m|sum|uzs)",
+                    re.I)
+_PURCHASE = re.compile(r"покупк|xarid|харид|purchase", re.I)
+_PAID = re.compile(r"(оплачен|погашен|to'?langan|тўланган|paid)", re.I)
+
+
+def _money(text: str) -> list[int]:
+    return [int(re.sub(r"\D", "", m)) for m in _MONEY.findall(text)]
+
+
+def parse_contract(lines: list[str], today: date) -> dict[str, Any]:
+    """The installment contract and its schedule: what was paid for, when, and the payments still due."""
+    result: dict[str, Any] = {"installment": True}
+    whole = " ".join(lines)
+    m = re.search(r"№\s*\d+\s*(?:от|dan|дан)?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})", whole, re.I)
+    if m and _dates(m.group(1)):
+        result["contract_date"] = _dates(m.group(1))[0].isoformat()
+    for i, line in enumerate(lines):  # «ПОКУПКА В 1Fit» and the amount on the same or the next line
+        if _PURCHASE.search(line):
+            amounts = _money(" ".join(lines[i:i + 2]))
+            if amounts:
+                result["contract_total"] = amounts[0]
+                break
+    # The schedule: one row per payment, a date and an amount. Rows still to pay are dated after today and
+    # not marked as paid.
+    due = []
+    for line in lines:
+        dates, amounts = _dates(line), _money(line)
+        if len(dates) == 1 and amounts and dates[0] > today and not _PAID.search(line):
+            due.append(amounts[0])
+    if due:
+        result["payments_left"] = len(due)
+        result["monthly_payment"] = max(set(due), key=due.count)
+    return result
+
 
 def _month(word: str) -> int | None:
     w = word.lower()
@@ -96,6 +137,8 @@ def parse_card(text: str | None, today: date) -> dict[str, Any]:
     if not text:
         return {}
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if _CONTRACT.search(" ".join(lines)):
+        return parse_contract(lines, today)
     result: dict[str, Any] = {}
 
     ends, starts, others = [], [], []
@@ -167,8 +210,11 @@ def merge(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def mismatches(read: dict[str, Any], listing: dict[str, Any]) -> list[str]:
-    """Fields where the screenshot and the listing disagree: «end_date», «tariff_days», «freeze_days»."""
+    """Fields where the screenshot and the listing disagree: «end_date», «tariff_days», «freeze_days»,
+    and «installment» when the seller says «paid in full» next to an installment contract."""
     out = []
+    if read.get("installment") and listing.get("paid_in_full"):
+        out.append("installment")
     for key in ("end_date", "tariff_days", "freeze_days"):
         if read.get(key) is None or listing.get(key) is None:
             continue
@@ -177,7 +223,25 @@ def mismatches(read: dict[str, Any], listing: dict[str, Any]) -> list[str]:
                 out.append(key)
         elif read[key] != listing[key]:
             out.append(key)
+    if contract_after_start(read):
+        out.append("contract_date")
+    if not listing.get("paid_in_full") and read.get("payments_left") and listing.get("payments_left") \
+            and read["payments_left"] != listing["payments_left"]:
+        out.append("payments_left")
     return out
+
+
+CONTRACT_SLACK_DAYS = 14  # bought a little before it was activated is normal; months after is another purchase
+
+
+def contract_after_start(read: dict[str, Any]) -> bool:
+    """The contract is dated long after the card's membership began: it belongs to another purchase.
+    The card's end minus its tariff is the start or later (freezes only push the end), never earlier,
+    so a contract after it cannot be the one this membership was bought with."""
+    if not (read.get("contract_date") and read.get("end_date") and read.get("tariff_days")):
+        return False
+    start = date.fromordinal(date.fromisoformat(read["end_date"]).toordinal() - read["tariff_days"])
+    return (date.fromisoformat(read["contract_date"]) - start).days > CONTRACT_SLACK_DAYS
 
 
 # ------------------------------------------------------------------ Tesseract

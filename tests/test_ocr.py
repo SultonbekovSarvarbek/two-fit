@@ -37,6 +37,52 @@ def test_several_screenshots_and_mismatches():
     assert mismatches({"end_date": "2027-12-31"}, listing) == ["end_date"]
 
 
+def test_installment_contract_is_not_the_membership_card():
+    # listing #21: the seller sent the 1Fit installment contract, not only the card
+    contract = """Контракт
+    ПОКУПКА В 1Fit
+    6 400 000 сум
+    Заявка №690984 от 12.08.2026
+    Детали покупки
+    График платежей"""
+    assert parse_card(contract, TODAY) == {
+        "installment": True, "contract_total": 6_400_000, "contract_date": "2026-08-12"}
+
+
+def test_payment_schedule_gives_the_payments_left_not_the_end_date():
+    schedule = """График платежей
+    01.09.2026 533 333 сум Оплачено
+    01.10.2026 533 333 сум Оплачено
+    01.11.2026 533 333 сум Оплачено
+    01.12.2026 533 333 сум
+    01.01.2027 533 333 сум
+    01.08.2027 533 337 сум"""
+    read = parse_card(schedule, TODAY)
+    assert "end_date" not in read and "start_date" not in read  # was «до 01.08.2027 · начало 01.09.2026»
+    assert read == {"installment": True, "payments_left": 3, "monthly_payment": 533_333}
+
+
+def test_installment_screenshots_next_to_the_card():
+    card = parse_card("for 365 days\n146 days left until April 18, 2027", TODAY)
+    read = merge([parse_card("Контракт\nПОКУПКА В 1Fit 6 400 000 сум", TODAY), card])
+    assert read["end_date"] == "2027-04-18" and read["installment"]
+    assert mismatches(read, {"end_date": "2027-04-18", "paid_in_full": 1}) == ["installment"]
+    assert mismatches(read, {"end_date": "2027-04-18", "paid_in_full": 0}) == []
+    assert mismatches({"installment": True, "payments_left": 3},
+                      {"paid_in_full": 0, "payments_left": 9}) == ["payments_left"]
+
+
+def test_contract_dated_after_the_membership_began_is_flagged():
+    # the real pair: the card says 365 days until 18.04.2027 (began about 18.04.2026),
+    # the contract is from 12.08.2026 — four months later, so it is not this membership's
+    card = parse_card("Personal membership\nfor 365 days\n146 days left until April 18, 2027", TODAY)
+    contract = parse_card("Контракт\nПОКУПКА В 1Fit\n6 400 000 сум\nЗаявка №690984 от 12.08.2026", TODAY)
+    read = merge([card, contract])
+    assert mismatches(read, {"end_date": "2027-04-18", "tariff_days": 365, "paid_in_full": 0}) == ["contract_date"]
+    bought_with_it = {**read, "contract_date": "2026-04-10"}
+    assert mismatches(bought_with_it, {"end_date": "2027-04-18", "tariff_days": 365, "paid_in_full": 0}) == []
+
+
 # ------------------------------------------------------------------ the bot and the Mini App with a fake Tesseract
 from datetime import timedelta  # noqa: E402
 

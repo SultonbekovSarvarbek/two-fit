@@ -19,7 +19,7 @@ from .validators import PRICE_MIN
 # These are only the starting values: the price watcher keeps the current ones in the database.
 DEFAULT_FIT_PRICES: dict[int, int] = {90: 4_890_000, 180: 5_890_000, 365: 7_890_000, 730: 12_190_000}
 
-DISCOUNT_PERCENT = 20  # how much cheaper than 1Fit we advise to sell
+DISCOUNT_PERCENT = 15  # how much cheaper than 1Fit we advise to sell
 MAX_PERCENT = 85       # a seller may not ask more than this share of the 1Fit value: it would not sell
 MIN_PERCENT = 40       # below this the seller is warned (a typo or a giveaway)
 SUSPICIOUS_PERCENT = 25  # below this it is almost surely the price of one month, not of the whole term
