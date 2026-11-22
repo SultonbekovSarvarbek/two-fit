@@ -1,7 +1,7 @@
 """SQLite storage and all business rules of the marketplace.
 
 Every state change goes through this module, so the rules (who may do what,
-no double sale, no double commission) live in one place and are covered by tests.
+one payment per listing fee) live in one place and are covered by tests.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from typing import Any
 
 import aiosqlite
 
-from .money import calc_commission
 from .pricing import advise, normalize_prices
 from .usage import DAYS_PER_MONTH
 from .validators import TARIFF_PLANS
@@ -31,17 +30,19 @@ def today_local() -> date:
 
 
 class LS:  # listing statuses
+    UNPAID = "unpaid"        # filled in, the listing fee is not paid yet: nobody but the seller sees it
     PENDING = "pending"      # waiting for moderation
     APPROVED = "approved"    # published in the catalog
     REJECTED = "rejected"    # rejected by admin with a reason
     WITHDRAWN = "withdrawn"  # taken down by the seller
     REMOVED = "removed"      # taken down by an admin
-    RESERVED = "reserved"    # admin picked a buyer, deal is being agreed
-    SOLD = "sold"            # deal closed
+    RESERVED = "reserved"    # the operator's deals before the marketplace: kept for old listings, no longer set
+    SOLD = "sold"            # the seller marked it sold
 
-    ALL = (PENDING, APPROVED, REJECTED, WITHDRAWN, REMOVED, RESERVED, SOLD)
-    SELLER_EDITABLE = (PENDING, APPROVED, REJECTED, WITHDRAWN, REMOVED)
-    SELLER_WITHDRAWABLE = (PENDING, APPROVED, REJECTED)
+    ALL = (UNPAID, PENDING, APPROVED, REJECTED, WITHDRAWN, REMOVED, RESERVED, SOLD)
+    SELLER_EDITABLE = (UNPAID, PENDING, APPROVED, REJECTED, WITHDRAWN, REMOVED)
+    SELLER_WITHDRAWABLE = (UNPAID, PENDING, APPROVED, REJECTED)
+    SELLER_SELLABLE = (APPROVED,)  # «Sold»: the seller takes it out of the catalog for good
     ADMIN_REMOVABLE = (PENDING, APPROVED, REJECTED)
 
 
@@ -49,21 +50,6 @@ class LK:  # what a listing sells
     MEMBERSHIP = "membership"  # a 1Fit membership, re-registered to the buyer
     PROMO = "promo"            # a 1Fit promo code, handed to the buyer by the operator
     ALL = (MEMBERSHIP, PROMO)
-
-
-class RS:  # purchase request statuses
-    NEW = "new"
-    SELECTED = "selected"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    CLOSED = "closed"
-
-    ACTIVE = (NEW, SELECTED)
-
-
-class CS:  # commission statuses
-    PENDING = "pending"
-    PAID = "paid"
 
 
 class RepoError(Exception):
@@ -123,10 +109,24 @@ CREATE TABLE IF NOT EXISTS listings (
     sale_reported_at          TEXT,
     created_at                TEXT NOT NULL,
     updated_at                TEXT NOT NULL,
-    published_at              TEXT
+    published_at              TEXT,
+    fee_amount                INTEGER,            -- the listing fee to pay, сум; NULL or 0: placed for free
+    fee_paid_at               TEXT,               -- when the seller paid it
+    fee_charge_id             TEXT                -- Telegram's payment charge id: one payment, one listing
 );
 CREATE INDEX IF NOT EXISTS ix_listings_catalog ON listings(status, end_date, city, published_at);
 CREATE INDEX IF NOT EXISTS ix_listings_seller ON listings(seller_id);
+
+CREATE TABLE IF NOT EXISTS fee_payments (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id          INTEGER NOT NULL REFERENCES listings(id),
+    user_id             INTEGER NOT NULL,
+    amount              INTEGER NOT NULL,          -- сум
+    currency            TEXT NOT NULL,
+    charge_id           TEXT NOT NULL UNIQUE,      -- telegram_payment_charge_id: never counted twice
+    provider_charge_id  TEXT,
+    paid_at             TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS purchase_requests (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,6 +261,11 @@ class Repo:
             await self.db.execute("ALTER TABLE listings ADD COLUMN commission_percent INTEGER")
             await self.db.execute(
                 "UPDATE listings SET commission_percent = CASE kind WHEN 'promo' THEN 30 ELSE 10 END")
+        if "fee_amount" not in columns:  # listings placed before the fee were free
+            await self.db.execute("ALTER TABLE listings ADD COLUMN fee_amount INTEGER")
+        for column in ("fee_paid_at", "fee_charge_id"):
+            if column not in columns:
+                await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} TEXT")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -349,22 +354,16 @@ class Repo:
         return (bool(listing) and listing["status"] == LS.APPROVED and not self.is_expired(listing, today)
                 and (self.promo_enabled or listing["kind"] != LK.PROMO))
 
-    def percent_for(self, kind: str | None) -> int:
+    def percent_for(self, kind: str | None) -> int:  # still stored on a listing; nothing charges it now
         """Today's rate: 15% for a membership, 30% for a promo code (both from the settings)."""
         return self.promo_commission_percent if kind == LK.PROMO else self.commission_percent
 
-    def listing_percent(self, listing: dict[str, Any]) -> int:
-        """The rate this seller accepted, kept even if the settings change later."""
-        return listing.get("commission_percent") or self.percent_for(listing.get("kind"))
-
     @staticmethod
     def _check_draft(draft: dict[str, Any]) -> None:
-        required = ("city", "end_date", "price", "seller_name")  # the phone is optional: Telegram is enough
+        # The name and the phone are shown to every buyer: without them nobody can reach the seller.
+        required = ("city", "end_date", "price", "seller_name", "seller_phone")
         if any(draft.get(k) in (None, "") for k in required):
             raise RepoError("incomplete")
-        if draft.get("commission_accepted_price") != draft["price"]:
-            # The seller must have accepted the commission for exactly this price.
-            raise RepoError("commission_not_accepted")
         kind = draft.get("kind") or LK.MEMBERSHIP
         if kind not in LK.ALL:
             raise RepoError("incomplete")
@@ -452,7 +451,8 @@ class Repo:
             return 1, None, None
         return 0, draft["monthly_payment"], draft["payments_left"]
 
-    async def create_listing(self, seller_id: int, lang: str, draft: dict[str, Any]) -> int:
+    async def create_listing(self, seller_id: int, lang: str, draft: dict[str, Any], fee: int = 0) -> int:
+        """``fee``: what the seller pays to place it; until then it waits as unpaid, unseen by the admins."""
         self._check_draft(draft)
         async with self.tx():
             ts = now_iso()
@@ -461,15 +461,16 @@ class Repo:
                        start_date,
                        paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
-                       commission_percent, price_auto, payments_as_of, screenshots, ocr, status, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       commission_percent, price_auto, payments_as_of, screenshots, ocr, status, created_at, updated_at,
+                       fee_amount)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", self._shots(draft)[0],
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
                     self.percent_for(draft.get("kind")), *self._auto_fields(draft), *self._shots(draft)[1:],
-                    LS.PENDING, ts, ts,
+                    LS.UNPAID if fee > 0 else LS.PENDING, ts, ts, fee if fee > 0 else None,
                 ),
             )
             listing_id = cur.lastrowid
@@ -484,6 +485,8 @@ class Repo:
                 raise RepoError("not_found")
             if listing["status"] not in LS.SELLER_EDITABLE:
                 raise RepoError("bad_status")
+            # Paid once, edited for free: only a listing still waiting for its fee stays unpaid.
+            status = LS.UNPAID if self.fee_due(listing) else LS.PENDING
             await self.db.execute(
                 """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, tariff_days=?, freeze_days=?, start_date=?,
                        paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
@@ -496,7 +499,7 @@ class Repo:
                     draft.get("description") or "", self._shots(draft)[0],
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
                     self.percent_for(draft.get("kind")), *self._auto_fields(draft), *self._shots(draft)[1:],
-                    LS.PENDING, now_iso(), listing_id,
+                    status, now_iso(), listing_id,
                 ),
             )
             await self._log(listing_id, seller_id, "edited", price=draft["price"])
@@ -508,8 +511,7 @@ class Repo:
         )
         return rows, total
 
-    async def withdraw_by_seller(self, listing_id: int, seller_id: int) -> list[int]:
-        """Returns buyer ids whose open requests were closed."""
+    async def withdraw_by_seller(self, listing_id: int, seller_id: int) -> None:
         async with self.tx():
             listing = await self.get_listing(listing_id)
             if not listing or listing["seller_id"] != seller_id:
@@ -519,25 +521,68 @@ class Repo:
             await self.db.execute(
                 "UPDATE listings SET status=?, updated_at=? WHERE id=?", (LS.WITHDRAWN, now_iso(), listing_id)
             )
-            buyers = await self._close_open_requests(listing_id)
             await self._log(listing_id, seller_id, "withdrawn")
-            return buyers
 
-    async def report_sale(self, listing_id: int, seller_id: int) -> bool:
-        """Seller says it was sold. Returns False if already reported. Admin still closes the deal."""
+    async def mark_sold(self, listing_id: int, seller_id: int) -> None:
+        """The seller sold it to a buyer who called: it leaves the catalog for good."""
         async with self.tx():
             listing = await self.get_listing(listing_id)
             if not listing or listing["seller_id"] != seller_id:
                 raise RepoError("not_found")
-            if listing["status"] not in (LS.APPROVED, LS.RESERVED):
+            if listing["status"] not in LS.SELLER_SELLABLE:
                 raise RepoError("bad_status")
-            if listing["sale_reported_at"]:
-                return False
+            ts = now_iso()
             await self.db.execute(
-                "UPDATE listings SET sale_reported_at=?, updated_at=? WHERE id=?", (now_iso(), now_iso(), listing_id)
+                "UPDATE listings SET status=?, sale_reported_at=?, updated_at=? WHERE id=?",
+                (LS.SOLD, ts, ts, listing_id),
             )
-            await self._log(listing_id, seller_id, "sale_reported")
-            return True
+            await self._log(listing_id, seller_id, "sold")
+
+    # ------------------------------------------------------------- listing fee
+    @staticmethod
+    def fee_due(listing: dict[str, Any]) -> bool:
+        """A fee was set when it was created and has not been paid (withdrawing it does not waive it)."""
+        return bool(listing.get("fee_amount")) and not listing.get("fee_paid_at")
+
+    async def fee_problem(self, listing_id: int, user_id: int, amount: int | None = None) -> str | None:
+        """Why this listing cannot be paid for now (None: it can). Checked before Telegram takes the money."""
+        listing = await self.get_listing(listing_id)
+        if not listing or listing["seller_id"] != user_id:
+            return "not_found"
+        if listing["status"] != LS.UNPAID or not self.fee_due(listing):
+            return "already"
+        if amount is not None and amount != listing["fee_amount"]:
+            return "stale"  # the fee changed since the invoice was sent
+        return None
+
+    async def pay_fee(self, listing_id: int, user_id: int, amount: int, currency: str, charge_id: str,
+                      provider_charge_id: str | None = None) -> tuple[dict[str, Any], bool]:
+        """Telegram took the money: the listing goes to moderation. Returns (listing, first time).
+        The same charge reported twice is recorded once; a payment is never lost, even for a listing
+        that was withdrawn meanwhile (the admin sees it and can refund or publish)."""
+        async with self.tx():
+            if await self._one("SELECT id FROM fee_payments WHERE charge_id=?", (charge_id,)):
+                return await self.get_listing(listing_id), False
+            listing = await self.get_listing(listing_id)
+            if not listing:
+                raise RepoError("not_found")
+            ts = now_iso()
+            await self.db.execute(
+                """INSERT INTO fee_payments(listing_id, user_id, amount, currency, charge_id, provider_charge_id,
+                       paid_at) VALUES (?,?,?,?,?,?,?)""",
+                (listing_id, user_id, amount, currency, charge_id, provider_charge_id, ts),
+            )
+            first = not listing["fee_paid_at"]
+            if first:
+                await self.db.execute(
+                    "UPDATE listings SET fee_paid_at=?, fee_charge_id=?, updated_at=? WHERE id=?",
+                    (ts, charge_id, ts, listing_id),
+                )
+                await self.db.execute(
+                    "UPDATE listings SET status=? WHERE id=? AND status=?", (LS.PENDING, listing_id, LS.UNPAID)
+                )
+            await self._log(listing_id, user_id, "fee_paid", amount=amount, charge_id=charge_id, first=first)
+            return await self.get_listing(listing_id), first
 
     # ---------------------------------------------------------------- catalog
     async def catalog(self, city: str | None, limit: int, offset: int,
@@ -567,61 +612,6 @@ class Repo:
             (LS.APPROVED, (today or today_local()).isoformat()),
         )
         return [(r["city"], r["n"]) for r in rows]
-
-    # --------------------------------------------------------------- requests
-    async def create_request(self, listing_id: int, buyer_id: int, name: str, phone: str,
-                             today: date | None = None) -> int:
-        async with self.tx():
-            listing = await self.get_listing(listing_id)
-            if not self.is_available(listing, today):
-                raise RepoError("not_available")
-            if listing["seller_id"] == buyer_id:
-                raise RepoError("own")
-            if await self.active_request(listing_id, buyer_id):
-                raise RepoError("duplicate")
-            ts = now_iso()
-            cur = await self.db.execute(
-                """INSERT INTO purchase_requests(listing_id, buyer_id, buyer_name, buyer_phone, status,
-                       created_at, updated_at) VALUES (?,?,?,?,?,?,?)""",
-                (listing_id, buyer_id, name, phone, RS.NEW, ts, ts),
-            )
-            await self._log(listing_id, buyer_id, "request_created", request_id=cur.lastrowid)
-            return cur.lastrowid
-
-    async def active_request(self, listing_id: int, buyer_id: int) -> dict[str, Any] | None:
-        return await self._one(
-            "SELECT * FROM purchase_requests WHERE listing_id=? AND buyer_id=? AND status IN ('new','selected')",
-            (listing_id, buyer_id),
-        )
-
-    async def get_request(self, request_id: int) -> dict[str, Any] | None:
-        return await self._one("SELECT * FROM purchase_requests WHERE id=?", (request_id,))
-
-    async def listing_requests(self, listing_id: int) -> list[dict[str, Any]]:
-        return await self._all(
-            "SELECT * FROM purchase_requests WHERE listing_id=? ORDER BY id DESC", (listing_id,)
-        )
-
-    async def active_requests(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
-        total = await self._scalar("SELECT COUNT(*) FROM purchase_requests WHERE status IN ('new','selected')")
-        rows = await self._all(
-            """SELECT * FROM purchase_requests WHERE status IN ('new','selected')
-               ORDER BY id DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
-        )
-        return rows, total
-
-    async def _close_open_requests(self, listing_id: int, exclude_id: int | None = None) -> list[int]:
-        rows = await self._all(
-            "SELECT id, buyer_id FROM purchase_requests WHERE listing_id=? AND status IN ('new','selected')",
-            (listing_id,),
-        )
-        rows = [r for r in rows if r["id"] != exclude_id]
-        for r in rows:
-            await self.db.execute(
-                "UPDATE purchase_requests SET status=?, updated_at=? WHERE id=?", (RS.CLOSED, now_iso(), r["id"])
-            )
-        return [r["buyer_id"] for r in rows]
 
     # ------------------------------------------------------------------ admin
     async def listings_by_status(self, status: str | None, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
@@ -678,189 +668,21 @@ class Repo:
             await self.db.execute(
                 "UPDATE listings SET status=?, updated_at=? WHERE id=?", (LS.REMOVED, now_iso(), listing_id)
             )
-            buyers = await self._close_open_requests(listing_id)
             await self._log(listing_id, admin_id, "removed")
-            return await self.get_listing(listing_id), buyers
-
-    async def reserve(self, request_id: int, admin_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Admin picks a buyer: the listing leaves the catalog while the deal is agreed."""
-        async with self.tx():
-            req = await self.get_request(request_id)
-            if not req:
-                raise RepoError("not_found")
-            if req["status"] != RS.NEW:
-                raise RepoError("bad_status")
-            listing = await self.get_listing(req["listing_id"])
-            if listing["status"] != LS.APPROVED:
-                raise RepoError("bad_status")
-            ts = now_iso()
-            cur = await self.db.execute(
-                """UPDATE listings SET status=?, reserved_request_id=?, final_price=NULL,
-                       final_price_confirmed=0, updated_at=? WHERE id=? AND status=?""",
-                (LS.RESERVED, request_id, ts, listing["id"], LS.APPROVED),
-            )
-            if cur.rowcount != 1:
-                raise RepoError("bad_status")
-            await self.db.execute(
-                "UPDATE purchase_requests SET status=?, updated_at=? WHERE id=?", (RS.SELECTED, ts, request_id)
-            )
-            await self._log(listing["id"], admin_id, "reserved", request_id=request_id)
-            return await self.get_listing(listing["id"]), await self.get_request(request_id)
-
-    async def release_reserve(self, listing_id: int, admin_id: int) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        async with self.tx():
-            listing = await self.get_listing(listing_id)
-            if not listing:
-                raise RepoError("not_found")
-            if listing["status"] != LS.RESERVED:
-                raise RepoError("bad_status")
-            ts = now_iso()
-            req = await self.get_request(listing["reserved_request_id"]) if listing["reserved_request_id"] else None
-            if req and req["status"] == RS.SELECTED:
-                await self.db.execute(
-                    "UPDATE purchase_requests SET status=?, updated_at=? WHERE id=?", (RS.CANCELLED, ts, req["id"])
-                )
-            await self.db.execute(
-                """UPDATE listings SET status=?, reserved_request_id=NULL, final_price=NULL,
-                       final_price_confirmed=0, sale_reported_at=NULL, updated_at=? WHERE id=?""",
-                (LS.APPROVED, ts, listing_id),
-            )
-            await self._log(listing_id, admin_id, "reserve_released")
-            return await self.get_listing(listing_id), req
-
-    async def set_final_price(self, listing_id: int, admin_id: int, price: int) -> tuple[dict[str, Any], bool]:
-        """Returns (listing, needs_seller_confirmation)."""
-        async with self.tx():
-            listing = await self.get_listing(listing_id)
-            if not listing:
-                raise RepoError("not_found")
-            if listing["status"] != LS.RESERVED:
-                raise RepoError("bad_status")
-            confirmed = 1 if price == listing["commission_accepted_price"] else 0
-            await self.db.execute(
-                "UPDATE listings SET final_price=?, final_price_confirmed=?, updated_at=? WHERE id=?",
-                (price, confirmed, now_iso(), listing_id),
-            )
-            await self._log(listing_id, admin_id, "final_price_set", price=price, auto_confirmed=bool(confirmed))
-            return await self.get_listing(listing_id), not confirmed
-
-    async def seller_answer_price(self, listing_id: int, seller_id: int, price: int, accept: bool) -> dict[str, Any]:
-        async with self.tx():
-            listing = await self.get_listing(listing_id)
-            if not listing or listing["seller_id"] != seller_id:
-                raise RepoError("not_found")
-            # Button is stale if the admin changed the price again or the deal moved on.
-            if listing["status"] != LS.RESERVED or listing["final_price"] != price:
-                raise RepoError("stale")
-            if listing["final_price_confirmed"] and accept:
-                raise RepoError("already")
-            if accept:
-                await self.db.execute(
-                    """UPDATE listings SET final_price_confirmed=1, commission_accepted_price=?, updated_at=?
-                       WHERE id=?""",
-                    (price, now_iso(), listing_id),
-                )
-            else:
-                await self.db.execute(
-                    "UPDATE listings SET final_price=NULL, final_price_confirmed=0, updated_at=? WHERE id=?",
-                    (now_iso(), listing_id),
-                )
-            await self._log(listing_id, seller_id, "price_accepted" if accept else "price_declined", price=price)
-            return await self.get_listing(listing_id)
-
-    async def close_deal(self, listing_id: int, admin_id: int) -> tuple[dict[str, Any], list[int]]:
-        """Close the sale. Returns (deal, buyer ids of other requests that were closed)."""
-        async with self.tx():
-            listing = await self.get_listing(listing_id)
-            if not listing:
-                raise RepoError("not_found")
-            if await self._one("SELECT id FROM deals WHERE listing_id=?", (listing_id,)):
-                raise RepoError("already")
-            if listing["status"] != LS.RESERVED:
-                raise RepoError("bad_status")
-            if not listing["final_price"] or not listing["final_price_confirmed"]:
-                raise RepoError("price_not_confirmed")
-            req = await self.get_request(listing["reserved_request_id"]) if listing["reserved_request_id"] else None
-            c = calc_commission(listing["final_price"], self.listing_percent(listing))
-            ts = now_iso()
-            cur = await self.db.execute(
-                """INSERT INTO deals(listing_id, request_id, seller_id, seller_name, seller_phone, buyer_id,
-                       buyer_name, buyer_phone, sale_price, commission_percent, commission_amount,
-                       seller_amount, closed_at, closed_by, commission_status)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    listing_id, req["id"] if req else None, listing["seller_id"], listing["seller_name"],
-                    listing["seller_phone"], req["buyer_id"] if req else None, req["buyer_name"] if req else None,
-                    req["buyer_phone"] if req else None, c.price, c.percent, c.commission, c.net, ts, admin_id,
-                    CS.PENDING,
-                ),
-            )
-            deal_id = cur.lastrowid
-            upd = await self.db.execute(
-                "UPDATE listings SET status=?, updated_at=? WHERE id=? AND status=?",
-                (LS.SOLD, ts, listing_id, LS.RESERVED),
-            )
-            if upd.rowcount != 1:
-                raise RepoError("already")
-            if req:
-                await self.db.execute(
-                    "UPDATE purchase_requests SET status=?, updated_at=? WHERE id=?", (RS.COMPLETED, ts, req["id"])
-                )
-            others = await self._close_open_requests(listing_id, exclude_id=req["id"] if req else None)
-            await self._log(listing_id, admin_id, "deal_closed", deal_id=deal_id, price=c.price,
-                            commission=c.commission)
-            return await self.get_deal(deal_id), others
-
-    async def mark_commission_paid(self, deal_id: int, admin_id: int) -> dict[str, Any]:
-        async with self.tx():
-            deal = await self.get_deal(deal_id)
-            if not deal:
-                raise RepoError("not_found")
-            cur = await self.db.execute(
-                """UPDATE deals SET commission_status=?, commission_paid_at=?, commission_marked_by=?
-                   WHERE id=? AND commission_status=?""",
-                (CS.PAID, now_iso(), admin_id, deal_id, CS.PENDING),
-            )
-            if cur.rowcount != 1:
-                raise RepoError("already")
-            await self._log(deal["listing_id"], admin_id, "commission_paid", deal_id=deal_id,
-                            amount=deal["commission_amount"])
-            return await self.get_deal(deal_id)
-
-    async def get_deal(self, deal_id: int) -> dict[str, Any] | None:
-        return await self._one("SELECT * FROM deals WHERE id=?", (deal_id,))
-
-    async def deal_for_listing(self, listing_id: int) -> dict[str, Any] | None:
-        return await self._one("SELECT * FROM deals WHERE listing_id=?", (listing_id,))
-
-    async def deals(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
-        total = await self._scalar("SELECT COUNT(*) FROM deals")
-        rows = await self._all("SELECT * FROM deals ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
-        return rows, total
+            return await self.get_listing(listing_id), []
 
     async def stats(self, today: date | None = None) -> dict[str, int]:
         t = (today or today_local()).isoformat()
-        agg = await self._one(
-            """SELECT COUNT(*) AS deals, COALESCE(SUM(sale_price),0) AS volume,
-                      COALESCE(SUM(commission_amount),0) AS accrued,
-                      COALESCE(SUM(CASE WHEN commission_status='paid' THEN commission_amount END),0) AS paid
-               FROM deals"""
-        )
+        fees = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS total FROM fee_payments")
         return {
             "active": await self._scalar(
                 "SELECT COUNT(*) FROM listings WHERE status=? AND end_date>=?", (LS.APPROVED, t)
             ),
             "pending": await self.count_status(LS.PENDING),
-            "reserved": await self.count_status(LS.RESERVED),
-            "requests": await self._scalar("SELECT COUNT(*) FROM purchase_requests"),
-            "active_requests": await self._scalar(
-                "SELECT COUNT(*) FROM purchase_requests WHERE status IN ('new','selected')"
-            ),
-            "deals": agg["deals"],
-            "volume": agg["volume"],
-            "accrued": agg["accrued"],
-            "paid": agg["paid"],
-            "due": agg["accrued"] - agg["paid"],
+            "unpaid": await self.count_status(LS.UNPAID),
+            "sold": await self.count_status(LS.SOLD),
+            "payments": fees["n"],
+            "fees": fees["total"],
         }
 
     async def admins_langs(self, admin_ids: frozenset[int]) -> dict[int, str]:

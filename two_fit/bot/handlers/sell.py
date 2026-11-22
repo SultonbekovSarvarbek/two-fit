@@ -16,6 +16,7 @@ from ...ocr import MAX_SCREENSHOTS
 from ...repo import LK, LS, Repo, RepoError, today_local
 from ...usage import payments_guess
 from ...validators import (
+    DESC_MAX,
     TARIFF_PLANS,
     ValidationError,
     check_plan_end,
@@ -36,10 +37,11 @@ from ..callbacks import AdmCb, SellCb
 from ..context import Ctx
 from ..middlewares import Btn
 from ..notify import Notifier
+from ..payments import send_fee_invoice
 from ..ui import (
     advice_text,
     btn,
-    commission_block,
+    contacts_block,
     esc,
     fmt_day,
     kb,
@@ -149,7 +151,7 @@ def step_title(ctx: Ctx, data: dict, step: str) -> str:
 
 def prompt(ctx: Ctx, data: dict, step: str) -> str:
     key = PROMO_TEXTS.get(step) if _kind(data) == LK.PROMO else None
-    return step_title(ctx, data, step) + ctx.t(key or f"sell.ask_{step}", percent=ctx.percent(_kind(data)))
+    return step_title(ctx, data, step) + ctx.t(key or f"sell.ask_{step}", max=DESC_MAX)  # «до 500 символов»
 
 
 async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
@@ -254,24 +256,29 @@ async def draft_update(state: FSMContext, **values) -> dict:
 
 
 # ------------------------------------------------------------------ preview
-def preview_text(ctx: Ctx, data: dict) -> str:
+async def fee_due(ctx: Ctx, data: dict) -> int:
+    """What the seller pays on «Send»: the fee for a new listing, or the one an earlier listing still owes."""
+    if data.get("mode") == "edit":
+        listing = await ctx.repo.get_listing(data.get("listing_id") or 0)
+        return listing["fee_amount"] if listing and Repo.fee_due(listing) else 0
+    return ctx.cfg.listing_fee if ctx.cfg.fee_enabled else 0
+
+
+def preview_text(ctx: Ctx, data: dict, fee: int = 0) -> str:
     d = data["draft"]
-    private = ctx.t(
-        "sell.private_block",
-        name=esc(d["seller_name"]),
-        phone=esc(d["seller_phone"]),
-        photo=ctx.t("sell.photo_yes" if d.get("screenshot_file_id") else "sell.photo_no"),
-    )
+    private = ctx.t("sell.photo_line", photo=ctx.t("sell.photo_yes" if d.get("screenshot_file_id") else "sell.photo_no"))
     if d.get("promo_code"):
         private += ctx.t("sell.private_code", code=esc(d["promo_code"]))
     parts = [
         ctx.t("sell.preview_title"),
         listing_public(ctx, d, data.get("listing_id") or "—"),
+        contacts_block(ctx, d["seller_name"], d["seller_phone"], ctx.user.get("username"), ctx.user_id),
+        ctx.t("sell.contacts_public"),
         "—",
-        commission_block(ctx, d["price"], _kind(data)),
-        ctx.t("commission.note"),
+        ctx.t("sell.fee_note", fee=fmt_money(fee)) if fee else "",
         private,
     ]
+    parts = [p for p in parts if p]
     if data.get("auto_price") and _kind(data) == LK.MEMBERSHIP:
         parts.insert(3, ctx.t("sell.price_auto"))  # right under the card: where the price comes from
     if _kind(data) == LK.MEMBERSHIP and d.get("end_date"):
@@ -280,20 +287,18 @@ def preview_text(ctx: Ctx, data: dict) -> str:
     return "\n\n".join(parts)
 
 
-def preview_kb(ctx: Ctx, data: dict) -> InlineKeyboardMarkup:
-    accepted = bool(data.get("accepted"))
+def preview_kb(ctx: Ctx, data: dict, fee: int = 0) -> InlineKeyboardMarkup:
     negotiable = bool((data.get("draft") or {}).get("price_negotiable"))
-    percent = ctx.percent(_kind(data))
+    send = ctx.t("sell.send_pay", fee=fmt_money(fee)) if fee else ctx.t("sell.send")
     return kb(
         [btn(ctx.t("sell.negotiable_on" if negotiable else "sell.negotiable_off"), SellCb(action="negotiable"))],
-        [btn(ctx.t("sell.accept_on" if accepted else "sell.accept_off", percent=percent), SellCb(action="accept"))],
-        [btn(ctx.t("sell.send"), SellCb(action="send"))],
+        [btn(send, SellCb(action="send"))],
         [btn(ctx.t("sell.edit"), SellCb(action="edit")), btn(ctx.t("sell.cancel"), SellCb(action="cancel"))],
     )
 
 
 async def apply_auto_price(state: FSMContext, ctx: Ctx) -> None:
-    """With AUTO_PRICE a membership costs the recommended price; any change of it needs the consent again."""
+    """With AUTO_PRICE a membership costs the recommended price, recounted when the answers change."""
     data = await state.get_data()
     if not data.get("auto_price") or _kind(data) != LK.MEMBERSHIP:
         return
@@ -301,7 +306,6 @@ async def apply_auto_price(state: FSMContext, ctx: Ctx) -> None:
     a = price_advice(ctx, draft) if draft.get("tariff_days") else None
     if a and draft.get("price") != a.recommended:
         await draft_update(state, price=a.recommended)
-        await state.update_data(accepted=False)
 
 
 async def show_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
@@ -309,21 +313,25 @@ async def show_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.update_data(single=False)
     await apply_auto_price(state, ctx)
     data = await state.get_data()
-    await message.answer(preview_text(ctx, data), reply_markup=preview_kb(ctx, data))
+    fee = await fee_due(ctx, data)
+    await message.answer(preview_text(ctx, data, fee), reply_markup=preview_kb(ctx, data, fee))
 
 
 # ------------------------------------------------------------------ entry points
+def _fee_intro(ctx: Ctx) -> str:
+    return ctx.t("sell.intro_fee", fee=fmt_money(ctx.cfg.listing_fee)) if ctx.cfg.fee_enabled else ctx.t("sell.intro_free")
+
+
 @router.message(Btn("menu.sell"))
 async def menu_sell(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     if not ctx.cfg.promo_enabled:  # promo codes are hidden: only a membership can be sold
-        await state.set_data({"mode": "new", "draft": {"kind": LK.MEMBERSHIP}, "accepted": False,
-                              "auto_price": ctx.cfg.auto_price})
-        await message.answer(ctx.t("sell.intro_membership"), reply_markup=main_menu(ctx))
+        await state.set_data({"mode": "new", "draft": {"kind": LK.MEMBERSHIP}, "auto_price": ctx.cfg.auto_price})
+        await message.answer(ctx.t("sell.intro_membership") + _fee_intro(ctx), reply_markup=main_menu(ctx))
         await ask(message, state, ctx, "city")
         return
-    await state.set_data({"mode": "new", "draft": {}, "accepted": False, "auto_price": ctx.cfg.auto_price})
-    await message.answer(ctx.t("sell.intro"), reply_markup=main_menu(ctx))
+    await state.set_data({"mode": "new", "draft": {}, "auto_price": ctx.cfg.auto_price})
+    await message.answer(ctx.t("sell.intro") + _fee_intro(ctx), reply_markup=main_menu(ctx))
     await ask(message, state, ctx, "kind")
 
 
@@ -342,9 +350,6 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
         "mode": "edit",
         "listing_id": listing["id"],
         "draft": draft,
-        # Already accepted for this exact price and today's rate; a price or rate change resets it.
-        "accepted": listing["commission_accepted_price"] == listing["price"]
-        and ctx.repo.listing_percent(listing) == ctx.percent(listing["kind"]),
         "auto_price": ctx.cfg.auto_price,
     })
     await message.answer(ctx.t("sell.edit_intro", id=listing["id"]))
@@ -421,8 +426,6 @@ async def on_kind(call: CallbackQuery, callback_data: SellCb, state: FSMContext,
     await call.answer()
     choice = ctx.t("sell.kind_promo" if callback_data.value == LK.PROMO else "sell.kind_membership")
     await call.message.edit_text(ctx.t("sell.ask_kind") + "\n\n<b>" + esc(choice) + "</b>")
-    if _kind(await state.get_data()) != callback_data.value:
-        await state.update_data(accepted=False)  # another kind, another commission: confirm it again
     await draft_update(state, kind=callback_data.value)
     await advance(call.message, state, ctx, "kind")
 
@@ -615,14 +618,8 @@ async def _set_price(message: Message, state: FSMContext, ctx: Ctx, price: int, 
         await message.answer(ctx.t("err.price_too_high", max=fmt_money(a.max_price), price=fmt_money(a.recommended)),
                              reply_markup=_nav(ctx, "price", _advice_rows(ctx, draft)))
         return
-    old = draft.get("price")
-    if price != old:
-        # New price -> new commission -> the seller must confirm again.
-        if data.get("accepted"):
-            await message.answer(ctx.t("sell.accept_reset"))
-        await state.update_data(accepted=False)
     await draft_update(state, price=price)
-    text = ctx.t("sell.price_calc", block=commission_block(ctx, price, _kind(data)))
+    text = ctx.t("sell.price_set", price=fmt_money(price))
     if a and a.too_low(price):
         text += "\n\n" + ctx.t("advice.too_low", price=fmt_money(a.recommended))
     await message.answer(text)
@@ -842,23 +839,15 @@ async def on_phone(message: Message, state: FSMContext, ctx: Ctx) -> None:
 
 
 # ------------------------------------------------------------------ preview actions
-@router.callback_query(SellForm.preview, SellCb.filter(F.action == "accept"))
-async def on_accept(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
-    data = await state.get_data()
-    accepted = not data.get("accepted")
-    await state.update_data(accepted=accepted)
-    await call.answer()
-    await call.message.edit_reply_markup(reply_markup=preview_kb(ctx, await state.get_data()))
-
-
 @router.callback_query(SellForm.preview, SellCb.filter(F.action == "negotiable"))
 async def on_negotiable(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
-    """Fixed or negotiable price: shown to buyers next to the price, the commission math is unchanged."""
+    """Fixed or negotiable price: shown to buyers next to the price."""
     data = await state.get_data()
     await draft_update(state, price_negotiable=not (data.get("draft") or {}).get("price_negotiable"))
     data = await state.get_data()
+    fee = await fee_due(ctx, data)
     await call.answer()
-    await call.message.edit_text(preview_text(ctx, data), reply_markup=preview_kb(ctx, data))
+    await call.message.edit_text(preview_text(ctx, data, fee), reply_markup=preview_kb(ctx, data, fee))
 
 
 @router.callback_query(SellForm.preview, SellCb.filter(F.action == "edit"))
@@ -899,8 +888,12 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
     await apply_auto_price(state, ctx)  # 1Fit prices may have moved since the preview
     data = await state.get_data()
     draft = dict(data.get("draft") or {})
-    if not data.get("accepted"):
-        await call.answer(ctx.t("sell.need_accept"), show_alert=True)
+    if not draft.get("seller_phone"):
+        # Buyers call the seller: a listing made before the phone was asked needs it first.
+        await call.answer()
+        await call.message.edit_reply_markup(reply_markup=None)
+        await state.update_data(single=True)
+        await ask(call.message, state, ctx, "name")
         return
     if ctx.cfg.screenshot_required and not draft.get("screenshot_file_id"):
         # Listed before the screenshot was required: ask for it first.
@@ -937,16 +930,16 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
         await state.update_data(single=True)
         await ask(call.message, state, ctx, "price")
         return
-    draft["commission_accepted_price"] = draft.get("price")
     # An automatic price keeps following the days left after listing (Repo.reprice, every day).
     draft["price_auto"] = bool(data.get("auto_price")) and draft.get("kind") != LK.PROMO
+    fee = ctx.cfg.listing_fee if ctx.cfg.fee_enabled else 0
     try:
         if data.get("mode") == "edit":
             listing_id = data["listing_id"]
             await ctx.repo.update_listing_by_seller(listing_id, ctx.user_id, ctx.lang, draft)
             done_key, admin_key = "sell.resent", "admin.n.edited_listing"
         else:
-            listing_id = await ctx.repo.create_listing(ctx.user_id, ctx.lang, draft)
+            listing_id = await ctx.repo.create_listing(ctx.user_id, ctx.lang, draft, fee=fee)
             done_key, admin_key = "sell.sent", "admin.n.new_listing"
     except RepoError as e:
         await call.answer()
@@ -958,6 +951,13 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
     await state.clear()
     await call.answer()
     await call.message.edit_reply_markup(reply_markup=None)
+    listing = await ctx.repo.get_listing(listing_id)
+    if listing["status"] == LS.UNPAID:
+        # Saved, but the admins see it only once it is paid (payments handler).
+        await call.message.answer(ctx.t("sell.pay_now", id=listing_id, fee=fmt_money(listing["fee_amount"])),
+                                  reply_markup=main_menu(ctx))
+        await send_fee_invoice(call.bot, ctx, ctx.user_id, listing)
+        return
     await call.message.answer(ctx.t(done_key, id=listing_id), reply_markup=main_menu(ctx))
     await notifier.admins(ctx, lambda a: (
         a.t(admin_key, id=listing_id),

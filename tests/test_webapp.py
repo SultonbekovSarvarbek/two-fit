@@ -136,7 +136,7 @@ async def test_create_listing_goes_to_moderation_and_notifies_admin(h, api):
     assert status == 201
     listing = await h.repo.get_listing(data["id"])
     assert listing["status"] == LS.PENDING and listing["price"] == 2_000_000
-    assert listing["seller_phone"] == "+998901112233" and listing["commission_accepted_price"] == 2_000_000
+    assert listing["seller_phone"] == "+998901112233" and listing["fee_amount"] is None  # payments are off
     assert f"№{data['id']}" in h.texts_to(ADMIN)
     assert h.button(ADMIN, "Открыть").startswith(f"ad:open:{data['id']}:")
     # Not in the catalog until approved
@@ -144,12 +144,10 @@ async def test_create_listing_goes_to_moderation_and_notifies_admin(h, api):
     assert cat["total"] == 0
     # Contacts are remembered for the next form
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
-    assert boot["user"] == {"name": "Алишер", "phone": "+998901112233"}
+    assert boot["user"] == {"name": "Алишер", "phone": "+998901112233", "username": f"user{SELLER}"}
 
 
 @pytest.mark.parametrize("over, code, field", [
-    ({"accepted_price": None}, "commission_not_accepted", "accept"),
-    ({"accepted_price": 1_500_000}, "commission_not_accepted", "accept"),  # consent was for another price
     ({"city": "moscow"}, "bad_city", "city"),
     ({"end_date": "2020-01-01"}, "bad_date_past", "end_date"),
     ({"end_date": "31.05.2027"}, "bad_date_format", "end_date"),
@@ -161,6 +159,7 @@ async def test_create_listing_goes_to_moderation_and_notifies_admin(h, api):
     ({"description": "x" * 501}, "bad_desc_long", "description"),
     ({"name": ""}, "bad_name", "name"),
     ({"phone": "12"}, "bad_phone", "phone"),
+    ({"phone": None}, "bad_phone", "phone"),  # buyers call the seller: the phone is required
     ({"screenshot": {"file_id": "someone-elses", "sig": "0" * 32}}, "bad_photo", "screenshot"),
 ])
 async def test_create_listing_validation(h, api, over, code, field):
@@ -191,7 +190,7 @@ async def test_screenshot_upload_and_use(h, api):
     assert res.status == 400
 
 
-# ------------------------------------------------------------------ catalog and buying
+# ------------------------------------------------------------------ catalog and contacts
 async def test_catalog_shows_only_public_fields(h, api):
     lid = await publish(h, api)
     await publish(h, api, uid=STRANGER, city="samarkand", price="1500000", accepted_price=1_500_000)
@@ -207,34 +206,12 @@ async def test_catalog_shows_only_public_fields(h, api):
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]
 
+    # The card itself carries the seller's contacts — a regular marketplace — but never the screenshot.
     status, card = await api.call("GET", f"/api/listings/{lid}", BUYER)
-    assert status == 200 and card["own"] is False and card["requested"] is False
-    raw = json.dumps(card, ensure_ascii=False)
-    assert "Алишер" not in raw and "99890" not in raw and "seller" not in raw
-
-
-async def test_buy_request_rules(h, api):
-    await h.repo.touch_user(ADMIN, "boss", "Boss")
-    lid = await publish(h, api)
-    status, data = await api.call("POST", f"/api/listings/{lid}/request", BUYER, {"name": "Б", "phone": "901234567"})
-    assert (status, data["error"], data["field"]) == (400, "bad_name", "name")
-
-    status, data = await api.call("POST", f"/api/listings/{lid}/request", BUYER, {"name": "Борис", "phone": "901234567"})
-    assert status == 200
-    req = await h.repo.get_request(data["request_id"])
-    assert (req["buyer_id"], req["buyer_phone"], req["status"]) == (BUYER, "+998901234567", "new")
-    assert "Борис" in h.texts_to(ADMIN) and h.button(ADMIN, "Открыть").startswith(f"ad:reqs:{lid}:")
-    # A request does not reserve the listing
-    assert (await h.repo.get_listing(lid))["status"] == LS.APPROVED
-
-    _, card = await api.call("GET", f"/api/listings/{lid}", BUYER)
-    assert card["requested"] is True
-    status, data = await api.call("POST", f"/api/listings/{lid}/request", BUYER, {"name": "Борис", "phone": "901234567"})
-    assert (status, data["error"]) == (409, "duplicate")
-    status, data = await api.call("POST", f"/api/listings/{lid}/request", SELLER, {"name": "Алишер", "phone": "901112233"})
-    assert (status, data["error"]) == (409, "own")
-    status, data = await api.call("POST", "/api/listings/999/request", BUYER, {"name": "Борис", "phone": "901234567"})
-    assert (status, data["error"]) == (409, "not_available")
+    assert status == 200 and card["own"] is False
+    assert card["listing"]["seller"] == {"name": "Алишер", "phone": "+998901112233", "username": f"user{SELLER}",
+                                         "user_id": SELLER}
+    assert "screenshot" not in json.dumps(card)
 
 
 # ------------------------------------------------------------------ my listings
@@ -242,7 +219,7 @@ async def test_my_listings_are_private_to_the_seller(h, api):
     status, data = await api.call("POST", "/api/listings", SELLER, draft())
     lid = data["id"]
     _, mine = await api.call("GET", "/api/my", SELLER)
-    assert [(x["id"], x["status"], x["commission"], x["net"]) for x in mine["items"]] == [(lid, "pending", 200_000, 1_800_000)]
+    assert [(x["id"], x["status"], x["fee_due"]) for x in mine["items"]] == [(lid, "pending", False)]
     assert mine["items"][0]["seller_phone"] == "+998901112233"
     _, other = await api.call("GET", "/api/my", STRANGER)
     assert other["items"] == []
@@ -252,7 +229,7 @@ async def test_my_listings_are_private_to_the_seller(h, api):
     status, _ = await api.call("GET", f"/api/listings/{lid}", STRANGER)
     assert status == 404
     for method, path in (("PUT", f"/api/listings/{lid}"), ("POST", f"/api/listings/{lid}/withdraw"),
-                         ("POST", f"/api/listings/{lid}/report")):
+                         ("POST", f"/api/listings/{lid}/sold"), ("POST", f"/api/listings/{lid}/invoice")):
         status, data = await api.call(method, path, STRANGER, draft())
         assert (status, data["error"]) == (404, "not_found")
     assert (await h.repo.get_listing(lid))["status"] == LS.PENDING
@@ -262,8 +239,6 @@ async def test_edit_sends_back_to_moderation(h, api):
     lid = await publish(h, api)
     await h.repo.touch_user(ADMIN, "boss", "Boss")
     status, data = await api.call("PUT", f"/api/listings/{lid}", SELLER, draft(price="1 500 000"))
-    assert (status, data["error"]) == (400, "commission_not_accepted")  # new price needs a new consent
-    status, data = await api.call("PUT", f"/api/listings/{lid}", SELLER, draft(price="1 500 000", accepted_price=1_500_000))
     assert status == 200
     listing = await h.repo.get_listing(lid)
     assert (listing["status"], listing["price"], listing["published_at"]) == (LS.PENDING, 1_500_000, None)
@@ -272,24 +247,71 @@ async def test_edit_sends_back_to_moderation(h, api):
     assert cat["total"] == 0
 
 
-async def test_withdraw_and_report(h, api):
+async def test_withdraw_and_sold(h, api):
     await h.repo.touch_user(ADMIN, "boss", "Boss")
     lid = await publish(h, api)
-    await api.call("POST", f"/api/listings/{lid}/request", BUYER, {"name": "Борис", "phone": "901234567"})
-
-    status, data = await api.call("POST", f"/api/listings/{lid}/report", SELLER)
-    assert status == 200 and data["listing"]["sale_reported"] and not data["listing"]["can_report"]
-    admin_before = len(h.to(ADMIN))
-    status, _ = await api.call("POST", f"/api/listings/{lid}/report", SELLER)
-    assert status == 200 and len(h.to(ADMIN)) == admin_before  # the admin is told once
-
     status, data = await api.call("POST", f"/api/listings/{lid}/withdraw", SELLER)
     assert status == 200 and data["listing"]["status"] == "withdrawn" and not data["listing"]["can_withdraw"]
-    assert f"№{lid}" in text_of(h.to(BUYER)[-1])  # the buyer learns the listing is gone
+    assert "снял объявление" in h.texts_to(ADMIN)
     status, data = await api.call("POST", f"/api/listings/{lid}/withdraw", SELLER)
     assert (status, data["error"]) == (409, "bad_status")
     _, cat = await api.call("GET", "/api/catalog", BUYER)
     assert cat["total"] == 0
+
+    sold = await publish(h, api)
+    _, mine = await api.call("GET", "/api/my", SELLER)
+    assert next(x for x in mine["items"] if x["id"] == sold)["can_sold"] is True
+    status, data = await api.call("POST", f"/api/listings/{sold}/sold", SELLER)
+    assert status == 200 and data["listing"]["status"] == "sold" and not data["listing"]["can_sold"]
+    assert not data["listing"]["can_edit"]
+    status, data = await api.call("POST", f"/api/listings/{sold}/sold", SELLER)
+    assert (status, data["error"]) == (409, "bad_status")
+    status, _ = await api.call("GET", f"/api/listings/{sold}", BUYER)
+    assert status == 404
+
+
+async def test_listing_fee_in_the_mini_app(tmp_path):
+    h = await Harness(tmp_path / "fee.db", fee=30_000, payment_token="CLICK:TEST").start()
+    links = []
+
+    async def fake_link(bot, ctx, listing):
+        links.append(listing["id"])
+        return f"https://t.me/$invoice-{listing['id']}"
+    import two_fit.webapp.server as server
+    real, server.fee_invoice_link = server.fee_invoice_link, fake_link
+    try:
+        await h.repo.touch_user(ADMIN, "boss", "Boss")
+        app = create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"])
+        async with TestClient(TestServer(app)) as client:
+            api = Api(client, h.cfg.bot_token)
+            _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+            assert boot["vars"]["fee"] == 30_000 and "30" in boot["vars"]["fee_text"]
+            status, made = await api.call("POST", "/api/listings", SELLER, draft())
+            lid = made["id"]
+            assert status == 201 and made["invoice_url"] == f"https://t.me/$invoice-{lid}"
+            assert (await h.repo.get_listing(lid))["status"] == LS.UNPAID
+            assert h.texts_to(ADMIN) == ""  # the admins hear of it once it is paid
+            _, mine = await api.call("GET", "/api/my", SELLER)
+            own = mine["items"][0]
+            assert (own["status"], own["fee"], own["fee_due"], own["can_pay"]) == ("unpaid", 30_000, True, True)
+            status, inv = await api.call("POST", f"/api/listings/{lid}/invoice", SELLER)
+            assert status == 200 and inv["invoice_url"]
+            status, err = await api.call("POST", f"/api/listings/{lid}/invoice", STRANGER)
+            assert status == 404
+            # editing an unpaid listing keeps it unpaid and offers the payment again
+            status, edited = await api.call("PUT", f"/api/listings/{lid}", SELLER, draft(price="1 900 000"))
+            assert status == 200 and edited["invoice_url"]
+            assert (await h.repo.get_listing(lid))["status"] == LS.UNPAID
+            # paid (the bot gets Telegram's payment message): no more invoices
+            await h.repo.pay_fee(lid, SELLER, 30_000, "UZS", "charge-1")
+            status, err = await api.call("POST", f"/api/listings/{lid}/invoice", SELLER)
+            assert (status, err["error"]) == (409, "already")
+            status, edited = await api.call("PUT", f"/api/listings/{lid}", SELLER, draft())
+            assert status == 200 and "invoice_url" not in edited
+            assert "повторной модерации" in h.texts_to(ADMIN)
+    finally:
+        server.fee_invoice_link = real
+        await h.stop()
 
 
 # ------------------------------------------------------------------ bot side
@@ -388,15 +410,14 @@ async def test_promo_code_listing(h, api):
     assert cat["items"][0]["kind"] == "promo" and "FIT-2026" not in str(cat)
     _, card = await api.call("GET", f"/api/listings/{lid}", BUYER)
     assert "FIT-2026" not in str(card)
-    # The seller sees the code and a 30% commission.
+    # The seller sees the code.
     _, mine = await api.call("GET", "/api/my", SELLER)
-    own = mine["items"][0]
-    assert own["promo_code"] == "FIT-2026" and (own["percent"], own["commission"], own["net"]) == (30, 30_000, 70_000)
+    assert mine["items"][0]["promo_code"] == "FIT-2026"
     # What is sold cannot be changed by editing.
     status, _ = await api.call("PUT", f"/api/listings/{lid}", SELLER, draft(**{**promo, "kind": "membership"}))
     assert status == 200 and (await h.repo.get_listing(lid))["kind"] == "promo"
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
-    assert boot["vars"]["promo_percent"] == 30 and "app.kind.promo" in boot["texts"]
+    assert "app.kind.promo" in boot["texts"]
     for key in ("any", "membership", "promo"):  # the sell page title and intro follow the choice
         assert f"app.sell.title_{key}" in boot["texts"] and f"app.sell.intro_{key}" in boot["texts"]
 
@@ -410,33 +431,6 @@ async def test_membership_shows_months_left_not_a_tariff(h, api):
     assert status == 400 and data["field"] == "tariff"
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
     assert {"app.left", "app.left_title", "app.f.time_left"} <= set(boot["texts"])
-
-
-async def test_sell_form_needs_no_contacts(h, api):
-    body = draft()
-    del body["name"], body["phone"]
-    status, data = await api.call("POST", "/api/listings", SELLER, body)
-    assert status == 201, data
-    listing = await h.repo.get_listing(data["id"])
-    assert listing["seller_name"] == f"Name{SELLER}" and listing["seller_phone"] == ""  # from Telegram
-    assert (await h.repo.get_user(SELLER))["contact_phone"] is None  # nothing empty saved as a contact
-    # The admin card shows no phone, but the seller's Telegram to reach them.
-    from two_fit.bot.context import Ctx
-    from two_fit.bot.handlers.admin import render_card
-    text, _ = await render_card(Ctx(h.repo, I18n(), h.cfg, {"id": ADMIN, "lang": "ru"}), listing)
-    assert "📞 —" in text and f"@user{SELLER}" in text
-    status, _ = await api.call("PUT", f"/api/listings/{data['id']}", SELLER, body)
-    assert status == 200 and (await h.repo.get_listing(data["id"]))["seller_name"] == f"Name{SELLER}"
-
-
-async def test_editing_after_a_rate_change_asks_to_accept_again(h, api):
-    lid = await publish(h, api)  # accepted at the harness rate, 10%
-    await h.repo.db.execute("UPDATE listings SET commission_percent=5 WHERE id=?", (lid,))  # as if accepted earlier at 5%
-    _, mine = await api.call("GET", "/api/my", SELLER)
-    own = mine["items"][0]
-    assert own["percent"] == 5 and own["rate_changed"] is True
-    await api.call("PUT", f"/api/listings/{lid}", SELLER, draft())
-    assert (await h.repo.get_listing(lid))["commission_percent"] == 10  # saving accepts today's rate
 
 
 async def test_only_1fit_cities_are_offered(h, api):
@@ -453,7 +447,7 @@ async def test_only_1fit_cities_are_offered(h, api):
 
 def repo_draft():
     return {"tariff": "", "end_date": END, "price": 2_000_000, "commission_accepted_price": 2_000_000,
-            "seller_name": "A", "seller_phone": "", "paid_in_full": True, "kind": "membership", "tariff_days": 365}
+            "seller_name": "A", "seller_phone": "+998901112233", "paid_in_full": True, "kind": "membership", "tariff_days": 365}
 
 
 async def test_promo_codes_hidden_by_default(tmp_path):
@@ -467,7 +461,7 @@ async def test_promo_codes_hidden_by_default(tmp_path):
         async with TestClient(TestServer(app)) as client:
             api = Api(client, h.cfg.bot_token)
             _, boot = await api.call("GET", "/api/bootstrap", SELLER)
-            assert boot["vars"]["promo_enabled"] is False and boot["vars"]["fees"] == "10%"
+            assert boot["vars"]["promo_enabled"] is False
             assert "промокод" not in T(boot, "app.how.6")
             promo = dict(kind="promo", promo_code="FIT-1", tariff="Безлимит на 1 месяц", price="100 000",
                          accepted_price=100_000, paid_in_full=None, tariff_days=None)

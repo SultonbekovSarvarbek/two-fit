@@ -99,7 +99,7 @@ async def test_bot_shows_and_applies_the_recommended_price(h):
     cb = h.button(SELLER, "Поставить")
     assert cb == f"sl:advice:{a.recommended}"
     calc = texts(await h.click(SELLER, cb))
-    assert "Расчёт для вашей цены" in calc
+    assert "Цена: <b>" in calc
     data = await h.dp.storage.get_data(key=_key(h))
     assert data["draft"]["price"] == a.recommended
 
@@ -328,11 +328,8 @@ async def test_auto_price_in_the_mini_app(tmp_path):
             api = Api(client, h.cfg.bot_token)
             _, boot = await api.call("GET", "/api/bootstrap", SELLER)
             assert boot["vars"]["auto_price"] is True
-            # Whatever price the app sends, the listing gets the recommended one; the consent is for that price.
-            status, err = await api.call("POST", "/api/listings", SELLER, draft(price="1", accepted_price=1))
-            assert (status, err["field"]) == (400, "accept")
-            status, made = await api.call("POST", "/api/listings", SELLER,
-                                          draft(price="999 999 999", accepted_price=a.recommended))
+            # Whatever price the app sends, the listing gets the recommended one.
+            status, made = await api.call("POST", "/api/listings", SELLER, draft(price="999 999 999"))
             assert status == 201, made
             assert (await h.repo.get_listing(made["id"]))["price"] == a.recommended
     finally:
@@ -465,7 +462,7 @@ async def _auto_listing(repo, today_end_days=300, **over):
     end = (today_local() + timedelta(days=today_end_days)).isoformat()
     a = advise(end, today_local(), repo.fit_prices, plan_days=365)
     d = {"city": "tashkent", "kind": "membership", "tariff_days": 365, "end_date": end, "paid_in_full": True,
-         "price": a.recommended, "commission_accepted_price": a.recommended, "seller_name": "A",
+         "price": a.recommended, "seller_name": "A", "seller_phone": "+998901112233",
          "price_auto": True, **over}
     lid = await repo.create_listing(SELLER, "ru", d)
     return lid, end
@@ -480,20 +477,18 @@ async def test_reprice_lowers_the_automatic_price_as_days_pass(h):
     assert await h.repo.reprice(month_later) == 1
     listing = await h.repo.get_listing(lid)
     expected = advise(end, month_later, h.repo.fit_prices, plan_days=365).recommended
-    assert listing["price"] == listing["commission_accepted_price"] == expected < first
+    assert listing["price"] == expected < first
 
 
-async def test_reprice_leaves_typed_prices_and_deals_alone(h):
+async def test_reprice_leaves_typed_prices_and_sold_alone(h):
     await h.repo.touch_user(SELLER, "s", "S")
-    await h.repo.touch_user(2, "b", "B")
     typed, _ = await _auto_listing(h.repo, price_auto=False)
-    in_deal, _ = await _auto_listing(h.repo)
-    await h.repo.approve(in_deal, ADMIN)
-    rid = await h.repo.create_request(in_deal, 2, "Бобур", "+998930000002")
-    await h.repo.reserve(rid, ADMIN)
-    before = {i: (await h.repo.get_listing(i))["price"] for i in (typed, in_deal)}
+    sold, _ = await _auto_listing(h.repo)
+    await h.repo.approve(sold, ADMIN)
+    await h.repo.mark_sold(sold, SELLER)
+    before = {i: (await h.repo.get_listing(i))["price"] for i in (typed, sold)}
     await h.repo.reprice(today_local() + timedelta(days=60))
-    assert {i: (await h.repo.get_listing(i))["price"] for i in (typed, in_deal)} == before
+    assert {i: (await h.repo.get_listing(i))["price"] for i in (typed, sold)} == before
 
 
 async def test_reprice_counts_down_the_installments(h):
@@ -518,8 +513,7 @@ async def test_listings_get_the_automatic_flag(tmp_path):
     try:
         async with TestClient(TestServer(create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"]))) as client:
             a = advise(END, today_local(), plan_days=365)
-            _, made = await Api(client, h.cfg.bot_token).call("POST", "/api/listings", SELLER,
-                                                               draft(accepted_price=a.recommended))
+            _, made = await Api(client, h.cfg.bot_token).call("POST", "/api/listings", SELLER, draft())
             assert (await h.repo.get_listing(made["id"]))["price_auto"] == 1
     finally:
         await h.stop()
@@ -534,20 +528,20 @@ async def test_how_it_works_explains_the_automatic_price(tmp_path):
             how = texts(await h.send(SELLER, "ℹ️ Как это работает"))
             assert ("Как считается цена" in how) is auto
             if auto:
-                assert "текущие цены 1Fit" in how and "на 15% дешевле" in how and "Комиссия Two Fit уже внутри цены" in how
-                assert how.index("Как считается цена") < how.index("Покупатель отдельной комиссии")  # right after the steps
+                assert "текущие цены 1Fit" in how and "на 15% дешевле" in how and "комисси" not in how.lower()
+                assert how.index("Как считается цена") < how.index("не партнёр 1Fit")  # right after the steps
         finally:
             await h.stop()
 
 
-async def test_buyers_are_told_to_pay_at_once(h, api):  # noqa: F811
-    """The listing price is paid at once and in full: no monthly parts. 1Fit's own installments stay monthly."""
+async def test_buyers_are_told_to_pay_after_the_transfer(h, api):  # noqa: F811
+    """Two Fit is not in the deal: buyers are told to pay the seller only once 1Fit moved the membership."""
     await h.send(SELLER, "/start")
     await h.click(SELLER, "lang:ru")
     how = texts(await h.send(SELLER, "ℹ️ Как это работает"))
-    assert "сразу и целиком" in how and "частями по месяцам мы не принимаем" in how
+    assert "только после того, как абонемент переоформлен" in how and "не участвуем в сделке" in how
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
-    assert "частями по месяцам" in boot["texts"]["app.how.pay"] and "сразу и целиком" in boot["texts"]["app.buy.pay_once"]
+    assert "переоформлен" in boot["texts"]["app.how.pay"] and "переоформлен" in boot["texts"]["app.seller.safety"]
 
 
 def test_seller_tariff_does_not_lower_the_base():

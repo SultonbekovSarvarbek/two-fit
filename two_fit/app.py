@@ -35,6 +35,7 @@ def create_dispatcher(repo: Repo, i18n: I18n, cfg: Config, bot: Bot) -> Dispatch
     mw = ContextMiddleware(repo, i18n, cfg)
     dp.message.outer_middleware(mw)
     dp.callback_query.outer_middleware(mw)
+    dp.pre_checkout_query.outer_middleware(mw)
     dp["notifier"] = Notifier(bot)
     dp["price_watcher"] = PriceWatcher(repo, i18n, cfg, dp["notifier"])
     dp.include_router(build_router())
@@ -90,6 +91,8 @@ async def run() -> None:
         raise SystemExit("BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
     if not cfg.admin_ids:
         log.warning("ADMIN_IDS is empty: nobody can moderate listings. Send /id to the bot to learn your id.")
+    if cfg.listing_fee > 0 and not cfg.payment_token:
+        log.warning("PAYMENT_PROVIDER_TOKEN is empty: listings are placed for free")
     for path in (cfg.welcome_image, cfg.logo):
         if not path.exists():
             log.warning("image not found: %s (the bot works without it)", path)

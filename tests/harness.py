@@ -60,12 +60,14 @@ def buttons_of(m: TelegramMethod) -> list:
 
 
 class Harness:
-    def __init__(self, db_path, admin_ids=frozenset({900}), promo=True, auto_price=False, screenshot_required=False):
+    def __init__(self, db_path, admin_ids=frozenset({900}), promo=True, auto_price=False, screenshot_required=False,
+                 fee=0, payment_token=""):
         self.cfg = Config(
             bot_token="42:TEST", admin_ids=frozenset(admin_ids), support_username="s_sarvar",
             db_path=db_path, commission_percent=10, page_size=5,
             welcome_image=db_path.parent / "missing.png", logo=db_path.parent / "missing-logo.png",
             promo_enabled=promo, auto_price=auto_price, screenshot_required=screenshot_required,
+            listing_fee=fee, payment_token=payment_token,
         )
         self.update_id = itertools.count(1)
 
@@ -108,6 +110,20 @@ class Harness:
               "message": {"message_id": next(_ids), "date": int(datetime.now().timestamp()),
                           "chat": {"id": uid, "type": "private"}, "text": "old"}}
         return await self._feed({"callback_query": cb})
+
+    async def pre_checkout(self, uid, payload: str, amount: int, currency="UZS"):
+        """Telegram asks the bot before it takes the money; ``amount`` in tiyin."""
+        q = {"id": str(next(_ids)), "from": self._user(uid), "currency": currency, "total_amount": amount,
+             "invoice_payload": payload}
+        return await self._feed({"pre_checkout_query": q})
+
+    async def pay(self, uid, payload: str, amount: int, charge="tg-charge-1", currency="UZS"):
+        """The payment message Telegram sends once the money is taken."""
+        msg = {"message_id": next(_ids), "date": int(datetime.now().timestamp()),
+               "chat": {"id": uid, "type": "private"}, "from": self._user(uid),
+               "successful_payment": {"currency": currency, "total_amount": amount, "invoice_payload": payload,
+                                      "telegram_payment_charge_id": charge, "provider_payment_charge_id": "click-1"}}
+        return await self._feed({"message": msg})
 
     # ------------------------------------------------------------ inspecting replies
     def to(self, uid) -> list[TelegramMethod]:

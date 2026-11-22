@@ -1,12 +1,13 @@
 from aiogram import Router
 
-from . import admin, buy, catalog, common, my, prices, sell
+from . import admin, catalog, common, my, pay, prices, sell
 
 
 def build_router() -> Router:
     root = Router(name="root")
     # Order matters: main-menu buttons work from any step, the fallback goes last.
-    children = (common.menu_router, admin.router, prices.router, catalog.router, buy.router, sell.router, my.router,
+    # pay goes early: a payment arrives as a message whatever step the seller is on.
+    children = (common.menu_router, pay.router, admin.router, prices.router, catalog.router, sell.router, my.router,
                 common.fallback_router)
     for child in children:
         # Routers are module-level; detach them so a dispatcher can be rebuilt in the same process

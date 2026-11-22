@@ -1,4 +1,4 @@
-"""«My listings»: statuses, edit, withdraw, report a sale; seller's answer on a changed price."""
+"""«My listings»: statuses, pay the fee, edit, withdraw, mark as sold."""
 from __future__ import annotations
 
 from aiogram import Router
@@ -7,12 +7,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from ...money import fmt_money
-from ...repo import LS, RepoError
-from ..callbacks import AdmCb, MyCb, PriceCb
+from ...repo import LS, Repo, RepoError
+from ..callbacks import AdmCb, MyCb
 from ..context import Ctx
 from ..middlewares import Btn
 from ..notify import Notifier
-from ..ui import btn, commission_block, esc, kb, listing_public, operator_btn, pager, pages_count, status_label
+from ..ui import btn, esc, kb, listing_public, operator_btn, pager, pages_count, seller_contacts, status_label
 from . import sell
 
 router = Router(name="my")
@@ -32,27 +32,30 @@ async def render_list(ctx: Ctx, page: int) -> tuple[str, InlineKeyboardMarkup | 
     return ctx.t("my.title"), kb(*items, pager(ctx, page, pages, lambda p: MyCb(action="list", page=p)))
 
 
-def card(ctx: Ctx, listing: dict, page: int) -> tuple[str, InlineKeyboardMarkup]:
+async def card(ctx: Ctx, listing: dict, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    contacts, _ = await seller_contacts(ctx, listing)
     parts = [
         ctx.t("my.status_line", status=status_label(ctx, listing)),
         listing_public(ctx, listing, listing["id"], installments=True),
-        commission_block(ctx, listing["price"], percent=ctx.repo.listing_percent(listing)),
+        contacts,
     ]
+    if Repo.fee_due(listing):
+        parts.append(ctx.t("my.unpaid", fee=fmt_money(listing["fee_amount"])))
     if listing["promo_code"]:
         parts.append(ctx.t("my.promo_code", code=esc(listing["promo_code"])))
     if listing["status"] == LS.REJECTED and listing["reject_reason"]:
         parts.append(ctx.t("my.reason", reason=esc(listing["reject_reason"])))
-    if listing["sale_reported_at"] and listing["status"] in (LS.APPROVED, LS.RESERVED):
-        parts.append(ctx.t("my.sale_reported"))
 
     lid, st = listing["id"], listing["status"]
     rows = []
+    if st == LS.UNPAID and Repo.fee_due(listing) and ctx.cfg.payment_token:
+        rows.append([btn(ctx.t("my.pay_btn", fee=fmt_money(listing["fee_amount"])), MyCb(action="pay", id=lid, page=page))])
     if st in LS.SELLER_EDITABLE:
         rows.append([btn(ctx.t("my.edit_btn"), MyCb(action="edit", id=lid, page=page))])
-    if st in (LS.PENDING, LS.APPROVED):
+    if st in LS.SELLER_SELLABLE:
+        rows.append([btn(ctx.t("my.sold_btn"), MyCb(action="sold", id=lid, page=page))])
+    if st in LS.SELLER_WITHDRAWABLE:
         rows.append([btn(ctx.t("my.withdraw_btn"), MyCb(action="wd", id=lid, page=page))])
-    if st in (LS.APPROVED, LS.RESERVED) and not listing["sale_reported_at"]:
-        rows.append([btn(ctx.t("my.report_btn"), MyCb(action="rep", id=lid, page=page))])
     rows.append([operator_btn(ctx)])
     rows.append([btn(ctx.t("common.back"), MyCb(action="list", page=page))])
     return "\n\n".join(parts), kb(*rows)
@@ -97,7 +100,7 @@ async def on_my(call: CallbackQuery, callback_data: MyCb, state: FSMContext, ctx
 
     if a == "open":
         await call.answer()
-        await _edit(call, *card(ctx, listing, page))
+        await _edit(call, *await card(ctx, listing, page))
 
     elif a == "edit":
         if listing["status"] not in LS.SELLER_EDITABLE:
@@ -116,64 +119,38 @@ async def on_my(call: CallbackQuery, callback_data: MyCb, state: FSMContext, ctx
 
     elif a == "wd!":
         try:
-            buyers = await ctx.repo.withdraw_by_seller(lid, ctx.user_id)
+            await ctx.repo.withdraw_by_seller(lid, ctx.user_id)
         except RepoError:
             await call.answer(ctx.t("my.cant_withdraw"), show_alert=True)
             return
         await call.answer()
+        was_unpaid = listing["status"] == LS.UNPAID
         listing = await ctx.repo.get_listing(lid)
-        text, markup = card(ctx, listing, page)
+        text, markup = await card(ctx, listing, page)
         await _edit(call, ctx.t("my.withdrawn", id=lid) + "\n\n" + text, markup)
-        await notifier.users(ctx, buyers, lambda u: (u.t("notify.request_closed", id=lid), None))
-        await notifier.admins(ctx, lambda adm: (
-            adm.t("admin.n.withdrawn", id=lid),
-            kb([btn(adm.t("admin.open_btn", id=lid), AdmCb(action="open", id=lid))]),
-        ))
+        if not was_unpaid:  # the admins never saw an unpaid one
+            await notifier.admins(ctx, lambda adm: (
+                adm.t("admin.n.withdrawn", id=lid),
+                kb([btn(adm.t("admin.open_btn", id=lid), AdmCb(action="open", id=lid))]),
+            ))
 
-    elif a == "rep":
+    elif a == "sold":
         await call.answer()
-        await _edit(call, ctx.t("my.report_confirm", id=lid), kb(
-            [btn(ctx.t("my.report_yes"), MyCb(action="rep!", id=lid, page=page))],
+        await _edit(call, ctx.t("my.sold_confirm", id=lid), kb(
+            [btn(ctx.t("my.sold_yes"), MyCb(action="sold!", id=lid, page=page))],
             [btn(ctx.t("common.back"), MyCb(action="open", id=lid, page=page))],
         ))
 
-    elif a == "rep!":
+    elif a == "sold!":
         try:
-            first = await ctx.repo.report_sale(lid, ctx.user_id)
+            await ctx.repo.mark_sold(lid, ctx.user_id)
         except RepoError:
-            await call.answer(ctx.t("my.cant_report"), show_alert=True)
+            await call.answer(ctx.t("my.cant_sold"), show_alert=True)
             return
         await call.answer()
-        if not first:
-            await _edit(call, ctx.t("my.report_already"), kb([operator_btn(ctx)]))
-            return
-        await _edit(call, ctx.t("my.report_done", id=lid), kb(
-            [operator_btn(ctx)], [btn(ctx.t("common.back"), MyCb(action="open", id=lid, page=page))]
-        ))
-        await notifier.admins(ctx, lambda adm: (
-            adm.t("admin.n.sale_reported", id=lid),
-            kb([btn(adm.t("admin.open_btn", id=lid), AdmCb(action="open", id=lid))]),
+        await _edit(call, ctx.t("my.sold_done", id=lid), kb(
+            [btn(ctx.t("common.back"), MyCb(action="list", page=page))]
         ))
     else:
         await call.answer(ctx.t("common.stale"), show_alert=True)
 
-
-@router.callback_query(PriceCb.filter())
-async def on_price_answer(call: CallbackQuery, callback_data: PriceCb, ctx: Ctx, notifier: Notifier) -> None:
-    lid, price, ok = callback_data.id, callback_data.price, bool(callback_data.ok)
-    try:
-        await ctx.repo.seller_answer_price(lid, ctx.user_id, price, ok)
-    except RepoError:
-        await call.answer(ctx.t("common.stale"), show_alert=True)
-        await call.message.edit_reply_markup(reply_markup=None)
-        return
-    await call.answer()
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.message.answer(
-        ctx.t("notify.price_confirmed" if ok else "notify.price_declined", id=lid), reply_markup=kb([operator_btn(ctx)])
-    )
-    key = "admin.n.price_confirmed" if ok else "admin.n.price_declined"
-    await notifier.admins(ctx, lambda adm: (
-        adm.t(key, id=lid, price=fmt_money(price)),
-        kb([btn(adm.t("admin.open_btn", id=lid), AdmCb(action="open", id=lid))]),
-    ))

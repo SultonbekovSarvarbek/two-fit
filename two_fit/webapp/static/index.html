@@ -198,6 +198,7 @@ p { margin: 0; }
   padding: 12px 20px; border-radius: 999px; font-weight: 600; text-align: center;
   background: var(--accent); color: var(--on-accent);
 }
+a.btn { text-decoration: none; }
 .btn:active { opacity: 0.75; }
 .btn[disabled] { opacity: 0.5; pointer-events: none; }
 .btn.ghost { background: none; color: var(--text); box-shadow: inset 0 0 0 1.5px var(--line); }
@@ -363,9 +364,6 @@ const money = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 // «7 мая 2027»: plain numbers like 07.05.2027 confuse people.
 const dmy = (iso) => { const [y, m, d] = iso.split("-").map(Number); return d + " " + T("app.months").split(",")[m - 1] + " " + y; };
 const city = (code) => T("city." + code);
-// Two Fit commission at today's rates: 15% for a membership, 30% for a promo code.
-const pct = (kind) => (kind === "promo" ? B.vars.promo_percent : B.vars.percent);
-const fee = (price, kind) => Math.floor((price * pct(kind) + 50) / 100);
 
 async function api(method, path, body) {
   const opt = { method, headers: { Authorization: "tma " + tg.initData } };
@@ -405,6 +403,31 @@ function openOperator() {
 }
 function operatorBtn(primary) {
   return h("button", { class: primary ? "btn" : "btn ghost", type: "button", onclick: openOperator }, T("app.operator"));
+}
+// The listing fee: Telegram's own payment form (Click or Payme). Resolves to "paid", "cancelled", "failed" or "pending".
+function payInvoice(url) {
+  return new Promise((resolve) => {
+    if (!url) { resolve("failed"); return; }
+    try { tg.openInvoice(url, resolve); } catch (e) { tg.openTelegramLink(url); resolve("pending"); }
+  });
+}
+function openTg(username) {
+  const url = "https://t.me/" + username;
+  try { tg.openTelegramLink(url); } catch (e) { window.open(url, "_blank"); }
+}
+// What every buyer sees to reach the seller: the name, the phone (tap to call) and Telegram.
+function sellerCard(s) {
+  const tel = String(s.phone || "").replace(/[^\d+]/g, "");
+  const copy = () => { try { navigator.clipboard.writeText(s.phone).then(() => toast(T("app.seller.copied"))); } catch (e) { /* no clipboard */ } };
+  return [
+    h("div", { class: "card rows" },
+      h("div", null, h("span", { class: "k" }, T("app.seller.title")), h("span", { class: "v" }, s.name)),
+      s.phone ? h("div", { onclick: copy }, h("span", { class: "k" }, T("app.f.phone")), h("span", { class: "v num" }, s.phone)) : null,
+      s.username ? h("div", null, h("span", { class: "k" }, "Telegram"), h("span", { class: "v" }, "@" + s.username)) : null),
+    h("div", { class: "stack" },
+      s.username ? h("button", { class: "btn", type: "button", onclick: () => openTg(s.username) }, T("app.seller.tg")) : null,
+      tel ? h("a", { class: s.username ? "btn ghost" : "btn", href: "tel:" + tel }, T("app.seller.call")) : null),
+  ];
 }
 async function busy(button, fn) {
   if (button.disabled) return;
@@ -604,17 +627,14 @@ function listingView(view, rev) {
     return skeletonDetail();
   }
   const l = view.data.listing;
-  const action = view.data.requested
-    ? [h("div", { class: "callout" }, T("app.buy.requested")), operatorBtn(true)]
-    : [h("button", { class: "btn", type: "button", onclick: () => go({ name: "buy", id: l.id }) }, T("app.buy.btn")), operatorBtn()];
   return [
     h("h1", null, T("app.listing", { id: l.id })),
     h("div", { class: "stack" },
       priceHero(l), usageBar(l, true), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
-      action,
-      h("p", { class: "note" }, "💳 " + T("app.buy.pay_once")),
-      h("p", { class: "note" }, T("app.buy.free") + " " + T("app.op_hint", { id: l.id }))),
+      h("h2", null, T("app.seller.title")),
+      sellerCard(l.seller),
+      h("p", { class: "note" }, "🛡 " + T("app.seller.safety"))),
   ];
 }
 
@@ -641,44 +661,14 @@ function showFieldError(fields, err) {
   wrap.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
-function buyView(view) {
-  if (view.done) {
-    return h("div", { class: "done" },
-      h("div", { class: "mark" }, icon("check")),
-      h("h1", null, T("app.buy.done_title")),
-      h("p", { class: "muted" }, T("app.buy.done_text", { id: view.id })),
-      h("div", { class: "stack", style: "margin-top:24px" },
-        operatorBtn(true), h("button", { class: "btn ghost", type: "button", onclick: () => switchTab("catalog") }, T("app.tab.catalog"))));
-  }
-  const name = h("input", { type: "text", autocomplete: "name", maxLength: B.limits.name_max, value: B.user.name });
-  const phone = h("input", { type: "tel", autocomplete: "tel", inputMode: "tel", placeholder: "+998 90 123 45 67", value: B.user.phone });
-  const fields = { name: field(T("app.buy.name"), name), phone: field(T("app.buy.phone"), phone) };
-  const submit = h("button", { class: "btn", type: "submit" }, T("app.buy.submit"));
-  const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
-    e.preventDefault();
-    if (submit.disabled) return;
-    submit.disabled = true;
-    try {
-      await api("POST", "listings/" + view.id + "/request", { name: name.value, phone: phone.value });
-      B.user = { name: name.value.trim(), phone: phone.value.trim() };
-      haptic("success");
-      S.stack = [{ name: "buy", id: view.id, done: true }];
-      render();
-    } catch (err) {
-      submit.disabled = false;
-      showFieldError(fields, err);
-    }
-  } }, h("div", { class: "card" }, fields.name, fields.phone), h("p", { class: "note" }, "💳 " + T("app.buy.pay_once")), h("p", { class: "note" }, "🔒 " + T("app.buy.privacy")), submit);
-  return [h("h1", null, T("app.buy.title", { id: view.id })), form];
-}
-
 function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
         kind: l.kind, code: l.promo_code || "", plan: l.tariff_days || null,
         freeze: !!l.freeze_days, freezeDays: l.freeze_days ? String(l.freeze_days) : "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "", leftTyped: !!l.payments_left,
-        name: l.seller_name, phone: l.seller_phone, shots: l.screenshot_count ? ["keep"] : [], keptShots: l.screenshot_count || 0, accept: !l.rate_changed }  // earlier screenshots stay attached
-    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shots: [], keptShots: 0, accept: false };
+        name: l.seller_name, phone: l.seller_phone, shots: l.screenshot_count ? ["keep"] : [], keptShots: l.screenshot_count || 0,  // earlier screenshots stay attached
+        fee: l.fee_due ? l.fee : 0 }  // paid once, edited for free
+    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shots: [], keptShots: 0, fee: B.vars.fee };
 }
 
 function sellForm(d, onDone, onKind) {
@@ -707,11 +697,10 @@ function sellForm(d, onDone, onKind) {
     }
   };
 
-  // What is sold: a membership (15%) or a promo code (30%). Fixed once listed.
+  // What is sold: a membership or a promo code. Fixed once listed.
   const kindErr = h("div", { class: "err", hidden: true });
   const kindSeg = h("div", { class: "seg", role: "group", "aria-label": T("app.f.kind") },
     ["membership", "promo"].map((k) => h("button", { type: "button", "data-kind": k, onclick: () => {
-      if (d.kind !== k) { d.accept = accept.checked = false; }  // another kind, another commission
       d.kind = k; setError(fields.kind, ""); drawKind();
     } }, T("app.kind." + k))));
   const kindWrap = h("div", { class: "field" }, h("span", null, T("app.f.kind")), kindSeg, kindErr);
@@ -764,26 +753,15 @@ function sellForm(d, onDone, onKind) {
     d.left = String(n); left.value = d.left;
   };
 
-  const calc = h("div", { class: "card rows", hidden: true });
-  const accept = h("input", { type: "checkbox", checked: d.accept });
-  const acceptText = h("span", null, T("app.sell.accept", { percent: pct(d.kind) }));
-  const acceptRow = h("label", { class: "card check" }, accept, acceptText);
-  const drawCalc = () => {
-    const p = Number(d.price);
-    calc.hidden = !(p >= L.price_min && p <= L.price_max);
-    if (calc.hidden) return;
-    const f = fee(p, d.kind);
-    calc.replaceChildren(
-      h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(p) + " " + T("app.sum"))),
-      h("div", null, h("span", { class: "k" }, T("app.c.fee", { percent: pct(d.kind) })), h("span", { class: "v num" }, "− " + money(f) + " " + T("app.sum"))),
-      h("div", { class: "strong" }, h("span", { class: "k" }, T("app.c.net")), h("span", { class: "v num" }, money(p - f) + " " + T("app.sum"))));
-  };
+  // The contacts every buyer sees: the name and phone typed here, Telegram from the seller's profile.
+  const name = bind(h("input", { type: "text", autocomplete: "name", maxLength: L.name_max, value: d.name || "" }), "name");
+  const phone = bind(h("input", { type: "tel", autocomplete: "tel", inputMode: "tel", placeholder: "+998 90 123 45 67", value: d.phone || "" }), "phone");
+  const tgName = B.user.username ? "@" + B.user.username : T("app.sell.no_username");
   const price = h("input", { type: "text", inputMode: "numeric", placeholder: "2 000 000", value: d.price ? money(d.price) : "" });
   const setPrice = (digits) => {
-    if (digits !== d.price) { d.accept = accept.checked = false; }  // consent is for one exact price
     d.price = digits;
     price.value = digits ? money(digits) : "";
-    drawCalc(); drawAdviceCheck();
+    drawAdviceCheck();
   };
   price.addEventListener("input", () => setPrice(price.value.replace(/\D/g, "").replace(/^0+/, "").slice(0, 9)));
 
@@ -851,7 +829,6 @@ function sellForm(d, onDone, onKind) {
       } catch (e) { /* no advice is fine: the form still works */ }
     }, 250);
   };
-  accept.addEventListener("change", () => { d.accept = accept.checked; acceptRow.classList.remove("invalid"); });
   const negotiable = h("input", { type: "checkbox", checked: d.negotiable });
   negotiable.addEventListener("change", () => { d.negotiable = negotiable.checked; });
   const negotiableRow = h("label", { class: "check" }, negotiable, h("span", null, T("app.sell.negotiable")));
@@ -932,7 +909,8 @@ function sellForm(d, onDone, onKind) {
     freeze_days: field(T("app.f.freeze_days"), freezeDays),
     price: field(T("app.f.price"), price, { hint: T("app.sell.price_hint") }),
     description: field(T("app.f.desc"), desc, { extra: counter }),
-    accept: acceptRow,
+    name: field(T("app.f.name"), name),
+    phone: field(T("app.f.phone"), phone, { hint: T("app.sell.contacts_hint", { tg: tgName }) }),
   };
   const priceHint = fields.price.querySelector(".hint");
   const label = (wrap) => wrap.querySelector("span");
@@ -959,13 +937,12 @@ function sellForm(d, onDone, onKind) {
     drawFreeze(); drawPriceMode(); drawDate();
     fields.tariff.hidden = !promo;  // only a promo code says what it gives
     label(fields.end_date).textContent = T(promo ? "app.f.date_promo" : "app.f.date");
-    acceptText.textContent = T("app.sell.accept", { percent: pct(d.kind) });
-    drawPay(); drawCalc(); loadAdvice();
+    drawPay(); loadAdvice();
     if (onKind) onKind(d.kind);
   };
-  // What the seller confirms: what is given away, for how much, and what they keep.
+  // What the seller confirms: what is given away, for how much, and how buyers reach them.
   const summaryRows = () => {
-    const p = Number(d.price), f = fee(p, d.kind), membership = d.kind === "membership";
+    const p = Number(d.price), membership = d.kind === "membership";
     return [
       membership ? [T("app.f.plan"), T("app.plan.short." + d.plan)] : [T("app.f.what_promo"), d.tariff],
       d.end_date ? [membership ? "📦 " + T("app.confirm.giving") : T("app.f.date_promo"),
@@ -973,13 +950,14 @@ function sellForm(d, onDone, onKind) {
       membership ? ["❄️ " + T("app.f.freeze_short"), d.freeze ? T("app.freeze_row", { days: d.freezeDays }) : T("app.confirm.none")] : null,
       membership ? [T("app.f.pay_short"), d.paid === false
         ? T("app.pay.installment_row", { monthly: money(d.monthly), left: d.left }) : T("app.pay.full_row")] : null,
-      [T("app.c.price"), money(p) + " " + T("app.sum") + (d.negotiable ? " · " + T("app.negotiable") : "")],
-      [T("app.c.fee", { percent: pct(d.kind) }), "− " + money(f) + " " + T("app.sum")],
-      [T("app.c.net"), money(p - f) + " " + T("app.sum"), true],
+      [T("app.f.price"), money(p) + " " + T("app.sum") + (d.negotiable ? " · " + T("app.negotiable") : ""), true],
+      ["📢 " + T("app.my.contacts"), [d.name, d.phone, B.user.username ? "@" + B.user.username : null].filter(Boolean).join(", ")],
       ["🔒 " + T("app.confirm.shots"), String(shotCount())],
+      d.fee ? ["💳 " + T("app.sell.pay_label"), money(d.fee) + " " + T("app.sum"), true] : null,
     ];
   };
-  const submit = h("button", { class: "btn", type: "submit" }, T("app.sell.submit"));
+  const submit = h("button", { class: "btn", type: "submit" },
+    d.fee ? T("app.sell.submit_pay", { fee: money(d.fee) }) : T("app.sell.submit"));
   const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
     e.preventDefault();
     if (submit.disabled) return;
@@ -988,14 +966,14 @@ function sellForm(d, onDone, onKind) {
     if (d.kind === "membership" && d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
     if (d.kind === "membership" && d.freeze && !Number(d.freezeDays)) { showFieldError(fields, { field: "freeze_days", message: T("app.err.freeze_days") }); return; }
     if (B.vars.shot_required && !shotCount()) { shotRow.classList.add("invalid"); showFieldError(fields, { field: "screenshot", message: T("app.err.shot_required") }); return; }
-    if (!d.accept) { showFieldError(fields, { field: "accept", message: T("app.err.accept") }); return; }
-    if (!(await confirmSheet(T("app.confirm.title"), summaryRows(), T("app.confirm.ok"), T("app.confirm.back")))) return;
+    if (!(await confirmSheet(T("app.confirm.title"), summaryRows().filter(Boolean),
+      d.fee ? T("app.sell.submit_pay", { fee: money(d.fee) }) : T("app.confirm.ok"), T("app.confirm.back")))) return;
     submit.disabled = true;
     const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null,
                    freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date, start_date: null, price: d.price, price_negotiable: d.negotiable,
                    kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
                    paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
-                   description: d.description, accepted_price: Number(d.price), screenshots: d.shots };
+                   description: d.description, name: d.name, phone: d.phone, screenshots: d.shots };
     const send = () => (d.id ? api("PUT", "listings/" + d.id, body) : api("POST", "listings", body));
     try {
       let res;
@@ -1007,8 +985,11 @@ function sellForm(d, onDone, onKind) {
         body.low_price_ok = true;
         res = await send();
       }
-      haptic("success");
-      onDone(res.id);
+      B.user = Object.assign({}, B.user, { name: (d.name || "").trim(), phone: (d.phone || "").trim() });
+      // Saved; an unpaid one goes to moderation once Telegram takes the fee.
+      const paid = "invoice_url" in res ? await payInvoice(res.invoice_url) : null;
+      haptic(paid && paid !== "paid" ? "warning" : "success");
+      onDone(res.id, paid);
     } catch (err) {
       submit.disabled = false;
       showFieldError(fields, err);
@@ -1020,24 +1001,26 @@ function sellForm(d, onDone, onKind) {
     payCard,
     freezeCard,
     adviceCard,
-    h("div", { class: "card" }, fields.price, priceWarn, negotiableRow), calc,
+    h("div", { class: "card" }, fields.price, priceWarn, negotiableRow),
     h("div", { class: "card" }, fields.description),
-    acceptRow,
-    h("p", { class: "note" }, T("commission.note")),
+    h("h2", null, T("app.sell.contacts")),
+    h("div", { class: "card" }, fields.name, fields.phone),
+    d.fee ? h("p", { class: "note" }, "💳 " + T("app.sell.fee", { fee: money(d.fee) })) : null,
     submit);
   drawCounter(); drawKind(); drawShot();
   return form;
 }
 
-function afterSubmit(id) {
+function afterSubmit(id, paid) {
   S.draft = null; S.my = null; S.cat.loaded = false;
   S.tab = "my"; S.stack = [];
   render();
-  toast(T("app.sell.sent", { id }));
+  // paid: null without a fee, "paid" when Telegram took it, anything else: still to pay from «My»
+  toast(paid == null ? T("app.sell.sent", { id }) : paid === "paid" ? T("app.my.paid") : T("app.sell.unpaid_text"));
 }
 function sellView() {
   if (!S.draft) S.draft = newDraft(null);
-  // The title and the commission line follow the choice: membership 15%, promo code 30%.
+  // The title and the intro follow the choice: a membership or a promo code.
   const title = h("h1"), intro = h("p", { class: "note", style: "margin:0 4px 14px" });
   const onKind = (kind) => {
     const key = kind === "promo" ? "promo" : kind === "membership" ? "membership" : "any";
@@ -1082,27 +1065,36 @@ function mineView(view) {
       const data = await api("POST", "listings/" + l.id + "/" + path);
       haptic("success"); update(data); toast(T(doneKey));
     }); } }, T(key));
+  const pay = h("button", { class: "btn", type: "button", onclick: (e) => busy(e.currentTarget, async () => {
+    const res = await api("POST", "listings/" + l.id + "/invoice");
+    const status = await payInvoice(res.invoice_url);
+    if (status !== "paid") return;
+    haptic("success"); toast(T("app.my.paid"));
+    S.my = null; S.tab = "my"; S.stack = []; render();  // the bot moves it to moderation as the payment lands
+  }) }, T("app.my.pay", { fee: money(l.fee) }));
   return [
     h("h1", null, T("app.listing", { id: l.id })),
     h("div", { class: "stack" },
       h("div", { class: "callout" + (l.status === "rejected" || l.status === "removed" ? " bad" : "") },
         h("div", { style: "font-weight:600" }, T("status." + l.status)),
         l.reject_reason ? h("div", { style: "margin-top:4px" }, T("app.my.reason", { reason: l.reject_reason })) : null,
-        l.sale_reported ? h("div", { style: "margin-top:4px" }, T("app.my.sale_reported")) : null),
+        l.fee_due ? h("div", { style: "margin-top:4px" }, "💳 " + T("app.my.unpaid", { fee: money(l.fee) })) : null),
+      l.can_pay ? pay : null,
       usageBar(l, true), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
       h("div", { class: "card rows" },
-        h("div", null, h("span", { class: "k" }, T("app.c.price")), h("span", { class: "v num" }, money(l.price) + " " + sumLabel(l))),
-        h("div", null, h("span", { class: "k" }, T("app.c.fee", { percent: l.percent })), h("span", { class: "v num" }, "− " + money(l.commission) + " " + T("app.sum"))),
-        h("div", { class: "strong" }, h("span", { class: "k" }, T("app.c.net")), h("span", { class: "v num" }, money(l.net) + " " + T("app.sum")))),
-      h("h2", null, "🔒 " + T("app.my.private")),
+        h("div", { class: "strong" }, h("span", { class: "k" }, T("app.f.price")), h("span", { class: "v num" }, money(l.price) + " " + sumLabel(l)))),
+      h("h2", null, "📢 " + T("app.my.contacts")),
       h("div", { class: "card rows" },
         h("div", null, h("span", { class: "k" }, l.seller_name), h("span", { class: "v num" }, l.seller_phone)),
+        B.user.username ? h("div", null, h("span", { class: "k" }, "Telegram"), h("span", { class: "v" }, "@" + B.user.username)) : null),
+      h("h2", null, "🔒 " + T("app.my.private")),
+      h("div", { class: "card rows" },
         l.promo_code ? h("div", null, h("span", { class: "k" }, T("app.f.code")), h("span", { class: "v num" }, l.promo_code)) : null,
         l.has_screenshot ? h("div", null, h("span", { class: "k" }, T("app.my.shot_yes"))) : null),
       h("div", { class: "stack", style: "margin-top:20px" },
         l.can_edit ? h("button", { class: "btn", type: "button", onclick: () => go({ name: "edit", listing: l }) }, T("app.my.edit")) : null,
-        l.can_report ? act("app.my.report", "app.my.report_q", "report", "app.my.report_done") : null,
+        l.can_sold ? act("app.my.sold", "app.my.sold_q", "sold", "app.my.sold_done") : null,
         l.can_withdraw ? act("app.my.withdraw", "app.my.withdraw_q", "withdraw", "app.my.withdrawn") : null,
         operatorBtn())),
   ];
@@ -1131,7 +1123,7 @@ function moreView() {
   ];
 }
 
-const VIEWS = { catalog: catalogView, listing: listingView, buy: buyView, sell: sellView, edit: editView, my: myView, mine: mineView, more: moreView };
+const VIEWS = { catalog: catalogView, listing: listingView, sell: sellView, edit: editView, my: myView, mine: mineView, more: moreView };
 
 /* ---------------------------------------------------------------- start */
 function gate(lines, retry) {

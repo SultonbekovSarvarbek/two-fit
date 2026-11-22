@@ -1,10 +1,10 @@
-"""Business rules: commission, validation, statuses, no double sale / double commission, persistence."""
+"""Business rules: the listing fee, validation, statuses, one payment per listing, persistence."""
 from datetime import date, timedelta
 
 import pytest
 
 from two_fit.money import calc_commission, fmt_money
-from two_fit.repo import LS, RS, Repo, RepoError, today_local
+from two_fit.repo import LS, Repo, RepoError, today_local
 from two_fit.validators import (
     ValidationError, contains_contacts, normalize_phone, parse_description, parse_end_date, parse_monthly,
     parse_payments_left, parse_price, parse_start_date,
@@ -142,11 +142,68 @@ def test_description_rejects_contacts():
 
 
 # ------------------------------------------------------------------ listings
-async def test_commission_must_be_accepted_for_exact_price(repo):
-    with pytest.raises(RepoError, match="commission_not_accepted"):
-        await repo.create_listing(1, "ru", draft(commission_accepted_price=1_000_000))
-    with pytest.raises(RepoError, match="commission_not_accepted"):
-        await repo.create_listing(1, "ru", draft(commission_accepted_price=None))
+async def test_name_and_phone_are_required(repo):
+    """Buyers call the seller: a listing without a phone is no use to anyone."""
+    for missing in ("seller_name", "seller_phone"):
+        with pytest.raises(RepoError, match="incomplete"):
+            await repo.create_listing(1, "ru", draft(**{missing: ""}))
+
+
+async def test_unpaid_listing_waits_for_the_fee(repo):
+    lid = await repo.create_listing(1, "ru", draft(), fee=30_000)
+    listing = await repo.get_listing(lid)
+    assert (listing["status"], listing["fee_amount"], listing["fee_paid_at"]) == (LS.UNPAID, 30_000, None)
+    assert await repo.count_status(LS.PENDING) == 0  # the admins do not see it yet
+    with pytest.raises(RepoError, match="bad_status"):
+        await repo.approve(lid, 99)
+    assert await repo.fee_problem(lid, 2) == "not_found"  # someone else's listing
+    assert await repo.fee_problem(lid, 1, 25_000) == "stale"  # an invoice for another sum
+    assert await repo.fee_problem(lid, 1, 30_000) is None
+
+    listing, first = await repo.pay_fee(lid, 1, 30_000, "UZS", "charge-1", "click-1")
+    assert first and listing["status"] == LS.PENDING and listing["fee_paid_at"]
+    assert await repo.fee_problem(lid, 1, 30_000) == "already"
+    # Telegram may report the same payment twice: it is counted once
+    _, again = await repo.pay_fee(lid, 1, 30_000, "UZS", "charge-1", "click-1")
+    assert not again
+    s = await repo.stats()
+    assert (s["payments"], s["fees"], s["pending"], s["unpaid"]) == (1, 30_000, 1, 0)
+
+
+async def test_paid_listing_is_edited_for_free(repo):
+    lid = await repo.create_listing(1, "ru", draft(), fee=30_000)
+    await repo.pay_fee(lid, 1, 30_000, "UZS", "charge-1")
+    await repo.approve(lid, 99)
+    await repo.update_listing_by_seller(lid, 1, "ru", draft(price=1_500_000))
+    assert (await repo.get_listing(lid))["status"] == LS.PENDING  # back to moderation, not to the cashier
+
+
+async def test_withdrawing_does_not_waive_the_fee(repo):
+    lid = await repo.create_listing(1, "ru", draft(), fee=30_000)
+    await repo.withdraw_by_seller(lid, 1)
+    assert await repo.fee_problem(lid, 1) == "already"  # nothing to pay for while it is withdrawn
+    await repo.update_listing_by_seller(lid, 1, "ru", draft())
+    assert (await repo.get_listing(lid))["status"] == LS.UNPAID  # editing it back does not skip the fee
+
+
+async def test_free_listing_goes_straight_to_moderation(repo):
+    lid = await repo.create_listing(1, "ru", draft())  # payments are off
+    listing = await repo.get_listing(lid)
+    assert listing["status"] == LS.PENDING and not repo.fee_due(listing)
+
+
+async def test_seller_marks_it_sold(repo):
+    lid = await repo.create_listing(1, "ru", draft())
+    with pytest.raises(RepoError, match="bad_status"):
+        await repo.mark_sold(lid, 1)  # not published yet
+    await repo.approve(lid, 99)
+    with pytest.raises(RepoError, match="not_found"):
+        await repo.mark_sold(lid, 2)
+    await repo.mark_sold(lid, 1)
+    assert (await repo.get_listing(lid))["status"] == LS.SOLD
+    assert (await repo.catalog(None, 10, 0))[1] == 0
+    with pytest.raises(RepoError, match="bad_status"):
+        await repo.update_listing_by_seller(lid, 1, "ru", draft())  # sold is final
 
 
 async def test_listing_visible_only_after_approval(repo):
@@ -157,13 +214,13 @@ async def test_listing_visible_only_after_approval(repo):
     assert total == 1 and rows[0]["id"] == lid
 
 
-async def test_catalog_hides_expired_reserved_sold_withdrawn(repo):
+async def test_catalog_hides_expired_unpaid_sold_withdrawn(repo):
     ids = [await repo.create_listing(1, "ru", draft()) for _ in range(4)]
     for i in ids:
         await repo.approve(i, 99)
     await repo.withdraw_by_seller(ids[0], 1)
-    r = await repo.create_request(ids[1], 2, "Buyer", "+998900000000")
-    await repo.reserve(r, 99)
+    await repo.mark_sold(ids[1], 1)
+    await repo.create_listing(1, "ru", draft(), fee=30_000)  # unpaid
     later = today_local() + timedelta(days=400)  # past every end_date
     assert (await repo.catalog(None, 10, 0))[1] == 2
     assert (await repo.catalog(None, 10, 0, today=later))[1] == 0
@@ -201,104 +258,6 @@ async def test_edit_goes_back_to_moderation(repo):
     assert listing["status"] == LS.PENDING and listing["commission_accepted_price"] == 1_500_000
     with pytest.raises(RepoError, match="not_found"):
         await repo.update_listing_by_seller(lid, 2, "ru", draft())  # someone else's listing
-
-
-async def test_requests_rules(repo):
-    lid = await repo.create_listing(1, "ru", draft())
-    with pytest.raises(RepoError, match="not_available"):
-        await repo.create_request(lid, 2, "B", "+998900000000")  # not approved yet
-    await repo.approve(lid, 99)
-    with pytest.raises(RepoError, match="own"):
-        await repo.create_request(lid, 1, "S", "+998900000000")
-    await repo.create_request(lid, 2, "B", "+998900000000")
-    with pytest.raises(RepoError, match="duplicate"):
-        await repo.create_request(lid, 2, "B", "+998900000000")
-    listing = await repo.get_listing(lid)
-    assert listing["status"] == LS.APPROVED  # a request does not reserve automatically
-
-
-async def full_deal(repo, final_price=None):
-    lid = await repo.create_listing(1, "ru", draft())
-    await repo.approve(lid, 99)
-    r2 = await repo.create_request(lid, 2, "Buyer Two", "+998900000002")
-    r3 = await repo.create_request(lid, 3, "Buyer Three", "+998900000003")
-    listing, _ = await repo.reserve(r2, 99)
-    assert listing["status"] == LS.RESERVED
-    return lid, r2, r3
-
-
-async def test_close_requires_confirmed_final_price(repo):
-    lid, r2, r3 = await full_deal(repo)
-    with pytest.raises(RepoError, match="price_not_confirmed"):
-        await repo.close_deal(lid, 99)
-    # Same price as accepted -> no extra confirmation needed.
-    _, needs = await repo.set_final_price(lid, 99, 2_000_000)
-    assert needs is False
-    deal, others = await repo.close_deal(lid, 99)
-    assert (deal["sale_price"], deal["commission_amount"], deal["seller_amount"]) == (2_000_000, 200_000, 1_800_000)
-    assert deal["commission_status"] == "pending" and others == [3]
-    assert (await repo.get_listing(lid))["status"] == LS.SOLD
-    assert (await repo.get_request(r2))["status"] == RS.COMPLETED
-    assert (await repo.get_request(r3))["status"] == RS.CLOSED
-
-
-async def test_changed_price_needs_seller_confirmation(repo):
-    lid, *_ = await full_deal(repo)
-    _, needs = await repo.set_final_price(lid, 99, 1_700_000)
-    assert needs is True
-    with pytest.raises(RepoError, match="price_not_confirmed"):
-        await repo.close_deal(lid, 99)
-    with pytest.raises(RepoError, match="not_found"):
-        await repo.seller_answer_price(lid, 2, 1_700_000, True)  # only the seller may confirm
-    with pytest.raises(RepoError, match="stale"):
-        await repo.seller_answer_price(lid, 1, 1_600_000, True)  # old button with another price
-    await repo.seller_answer_price(lid, 1, 1_700_000, True)
-    deal, _ = await repo.close_deal(lid, 99)
-    assert (deal["sale_price"], deal["commission_amount"], deal["seller_amount"]) == (1_700_000, 170_000, 1_530_000)
-
-
-async def test_seller_declines_price(repo):
-    lid, *_ = await full_deal(repo)
-    await repo.set_final_price(lid, 99, 1_000_000)
-    listing = await repo.seller_answer_price(lid, 1, 1_000_000, False)
-    assert listing["final_price"] is None
-    with pytest.raises(RepoError, match="price_not_confirmed"):
-        await repo.close_deal(lid, 99)
-
-
-async def test_no_double_sale_and_no_double_commission(repo):
-    lid, *_ = await full_deal(repo)
-    await repo.set_final_price(lid, 99, 2_000_000)
-    deal, _ = await repo.close_deal(lid, 99)
-    with pytest.raises(RepoError, match="already"):
-        await repo.close_deal(lid, 99)
-    with pytest.raises(RepoError):
-        await repo.reserve(await repo.create_request(lid, 3, "x", "+998900000009"), 99)
-    paid = await repo.mark_commission_paid(deal["id"], 99)
-    assert paid["commission_status"] == "paid" and paid["commission_paid_at"]
-    with pytest.raises(RepoError, match="already"):
-        await repo.mark_commission_paid(deal["id"], 99)
-    s = await repo.stats()
-    assert (s["deals"], s["volume"], s["accrued"], s["paid"], s["due"]) == (1, 2_000_000, 200_000, 200_000, 0)
-
-
-async def test_concurrent_close_only_once(repo):
-    import asyncio
-    lid, *_ = await full_deal(repo)
-    await repo.set_final_price(lid, 99, 2_000_000)
-    results = await asyncio.gather(*(repo.close_deal(lid, 99) for _ in range(5)), return_exceptions=True)
-    assert sum(not isinstance(r, Exception) for r in results) == 1
-    assert (await repo.deals(10, 0))[1] == 1
-
-
-async def test_release_reserve_returns_to_catalog(repo):
-    lid, r2, _ = await full_deal(repo)
-    listing, req = await repo.release_reserve(lid, 99)
-    assert listing["status"] == LS.APPROVED and req["id"] == r2
-    assert (await repo.get_request(r2))["status"] == RS.CANCELLED
-    assert (await repo.catalog(None, 10, 0))[1] == 1
-    s = await repo.stats()
-    assert s["deals"] == 0 and s["accrued"] == 0  # failed sale -> no commission
 
 
 async def test_reject_with_reason(repo):
@@ -376,19 +335,13 @@ async def test_payment_kind_is_required(repo):
     assert (listing["paid_in_full"], listing["monthly_payment"], listing["payments_left"]) == (1, None, None)
 
 
-async def test_promo_code_takes_30_percent(repo):
+async def test_promo_code_listing(repo):
     with pytest.raises(RepoError):
         await repo.create_listing(1, "ru", draft(kind="promo", paid_in_full=None))  # the code is required
     lid = await repo.create_listing(1, "ru", draft(price=100_000, kind="promo", promo_code="FIT-2026",
                                                    paid_in_full=None, start_date=FUTURE))
     listing = await repo.get_listing(lid)
     assert (listing["kind"], listing["promo_code"], listing["start_date"]) == ("promo", "FIT-2026", None)
-    await repo.approve(lid, 99)
-    rid = await repo.create_request(lid, 2, "Бобур", "+998930000002")
-    await repo.reserve(rid, 99)
-    await repo.set_final_price(lid, 99, 100_000)
-    deal, _ = await repo.close_deal(lid, 99)
-    assert (deal["commission_percent"], deal["commission_amount"], deal["seller_amount"]) == (30, 30_000, 70_000)
 
 
 def test_promo_code_parsing():
@@ -412,33 +365,6 @@ async def test_membership_keeps_no_tariff(repo):
     assert (await repo.get_listing(lid))["tariff"] == ""  # «12 months» misled buyers about what is left
     with pytest.raises(RepoError):  # a promo code must say what it gives
         await repo.create_listing(1, "ru", draft(kind="promo", promo_code="FIT-1", tariff=""))
-
-
-async def test_rate_change_keeps_the_accepted_rate(tmp_path):
-    """Raising the rate 10% -> 15% must not charge sellers who agreed to 10%."""
-    path = tmp_path / "rate.db"
-    old = Repo(path, 10)
-    await old.connect()
-    for uid in (1, 2, 99):
-        await old.touch_user(uid, f"user{uid}", f"User {uid}")
-    lid = await old.create_listing(1, "ru", draft())
-    await old.close()
-
-    r = Repo(path, 15)  # the settings now say 15%
-    await r.connect()
-    try:
-        assert (await r.get_listing(lid))["commission_percent"] == 10
-        await r.approve(lid, 99)
-        rid = await r.create_request(lid, 2, "Бобур", "+998930000002")
-        await r.reserve(rid, 99)
-        await r.set_final_price(lid, 99, 2_000_000)
-        deal, _ = await r.close_deal(lid, 99)
-        assert (deal["commission_percent"], deal["commission_amount"]) == (10, 200_000)
-        # A new listing, or one the seller edits and accepts again, goes at today's rate.
-        new = await r.create_listing(1, "ru", draft())
-        assert (await r.get_listing(new))["commission_percent"] == 15
-    finally:
-        await r.close()
 
 
 async def test_old_listings_get_the_rate_they_were_accepted_at(tmp_path):

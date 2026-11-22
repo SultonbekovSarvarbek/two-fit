@@ -247,13 +247,27 @@ def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:
                  total=fmt_money(monthly * left))
 
 
-def commission_block(ctx: Ctx, price: int, kind: str | None = None, percent: int | None = None) -> str:
-    """``percent``: the rate a listing was accepted at; without it, today's rate for that kind."""
-    c = ctx.commission(price, kind, percent)
-    return ctx.t(
-        "commission.block", price=fmt_money(c.price), commission=fmt_money(c.commission), net=fmt_money(c.net),
-        percent=c.percent,
-    )
+def tg_url(username: str | None) -> str | None:
+    """https://t.me/name opens the seller's chat for anyone; without a username there is no such link."""
+    return f"https://t.me/{username}" if username else None
+
+
+def contacts_block(ctx: Ctx, name: str, phone: str, username: str | None, user_id: int) -> str:
+    """«👤 Сарвар · 📞 +998 90 123 45 67 · ✈️ @name»: what every buyer sees to reach the seller directly."""
+    if username:
+        tg = f'<a href="{tg_url(username)}">@{esc(username)}</a>'
+    else:  # a mention works without a username, unless the seller's privacy settings hide it
+        tg = f'<a href="tg://user?id={int(user_id)}">{esc(ctx.t("card.tg_write"))}</a>'
+    return ctx.t("card.contacts", name=esc(name), phone=esc(phone or "—"), tg=tg)
+
+
+async def seller_contacts(ctx: Ctx, listing: dict[str, Any]) -> tuple[str, list[InlineKeyboardButton] | None]:
+    """The contacts block and a «Write in Telegram» button for a listing, with today's username of the seller."""
+    seller = await ctx.repo.get_user(listing["seller_id"]) or {}
+    username = seller.get("username")
+    text = contacts_block(ctx, listing["seller_name"], listing["seller_phone"], username, listing["seller_id"])
+    url = tg_url(username)
+    return text, [btn(ctx.t("card.tg_btn"), url=url)] if url else None
 
 
 def tg_ref(user: dict[str, Any] | None, user_id: int) -> str:

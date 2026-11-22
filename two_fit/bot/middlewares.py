@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
 from aiogram.filters import Filter
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, TelegramObject
 
 from ..config import Config
 from ..i18n import I18n
@@ -34,7 +34,7 @@ class ContextMiddleware(BaseMiddleware):
         user = await self.repo.touch_user(tg_user.id, tg_user.username, tg_user.full_name)
         data["ctx"] = Ctx(self.repo, self.i18n, self.cfg, user)
 
-        if user["lang"] is None:
+        if user["lang"] is None and not isinstance(event, PreCheckoutQuery):  # a payment check never waits
             is_lang_choice = isinstance(event, CallbackQuery) and (event.data or "").startswith("lang:")
             if not is_lang_choice:
                 if isinstance(event, CallbackQuery):

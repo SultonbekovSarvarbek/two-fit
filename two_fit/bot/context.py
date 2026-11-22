@@ -36,10 +36,17 @@ class Ctx:
             "percent": self.cfg.commission_percent,
             "promo_percent": self.cfg.promo_commission_percent,
             "fees": self.fees(),
+            "fee_text": self.fee_text(),
             "min": fmt_money(PRICE_MIN),
             "max": fmt_money(PRICE_MAX),
         }
         return self.i18n.t(self.lang, key, **{**defaults, **kwargs})
+
+    def fee_text(self) -> str:
+        """«30 000 сум, один раз» — what placing a listing costs; «бесплатно» while payments are off."""
+        if not self.cfg.fee_enabled:
+            return self.i18n.t(self.lang, "fee.free")
+        return self.i18n.t(self.lang, "fee.paid", fee=fmt_money(self.cfg.listing_fee))
 
     def fees(self) -> str:
         """«15%» — or «15% for a membership, 30% for a promo code» while promo codes are on sale."""

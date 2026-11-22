@@ -7,10 +7,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from ...money import fmt_money
-from ..callbacks import BuyCb, CardCb, CatCb, CityMenuCb
+from ..callbacks import CardCb, CatCb, CityMenuCb
 from ..context import Ctx
 from ..middlewares import Btn
-from ..ui import btn, buyer_total, esc, kb, listing_public, operator_btn, pager, pages_count, saving_mark
+from ..ui import btn, buyer_total, esc, kb, listing_public, pager, pages_count, saving_mark, seller_contacts
 
 router = Router(name="catalog")
 
@@ -89,12 +89,8 @@ async def on_city_menu(call: CallbackQuery, callback_data: CityMenuCb, ctx: Ctx)
     await _edit(call, text, kb(*rows))
 
 
-def card_markup(ctx: Ctx, listing_id: int, page: int, city: str) -> InlineKeyboardMarkup:
-    return kb(
-        [btn(ctx.t("catalog.buy_btn"), BuyCb(id=listing_id))],
-        [operator_btn(ctx)],
-        [btn(ctx.t("catalog.to_list"), CatCb(page=page, city=city))],
-    )
+def card_markup(ctx: Ctx, tg_row: list | None, page: int, city: str) -> InlineKeyboardMarkup:
+    return kb(tg_row, [btn(ctx.t("catalog.to_list"), CatCb(page=page, city=city))])
 
 
 @router.callback_query(CardCb.filter())
@@ -105,6 +101,7 @@ async def on_card(call: CallbackQuery, callback_data: CardCb, ctx: Ctx) -> None:
         text, markup = await render_catalog(ctx, callback_data.page, callback_data.city)
         await _edit(call, text, markup)
         return
-    text = listing_public(ctx, listing, listing["id"]) + "\n\n" + ctx.t("catalog.op_hint", id=listing["id"])
+    contacts, tg_row = await seller_contacts(ctx, listing)
+    text = listing_public(ctx, listing, listing["id"]) + "\n\n" + contacts + "\n\n" + ctx.t("catalog.safety")
     await call.answer()
-    await _edit(call, text, card_markup(ctx, listing["id"], callback_data.page, callback_data.city))
+    await _edit(call, text, card_markup(ctx, tg_row, callback_data.page, callback_data.city))

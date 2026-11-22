@@ -1,7 +1,7 @@
 """Telegram Mini App: one static page plus a JSON API.
 
 The API is a thin layer over ``Repo`` — the same rules as in the bot apply (who may do what,
-commission consent, no contacts in public texts). Every request is authenticated with the
+the listing fee before moderation, no contacts in descriptions). Every request is authenticated with the
 ``initData`` string signed by Telegram; nothing else identifies the user.
 """
 from __future__ import annotations
@@ -23,7 +23,8 @@ from aiohttp import web
 from ..bot.callbacks import AdmCb
 from ..bot.context import Ctx
 from ..bot.notify import Notifier
-from ..bot.ui import btn, esc, kb, price_advice
+from ..bot.payments import fee_invoice_link
+from ..bot.ui import btn, kb, price_advice
 from ..config import Config
 from .. import ocr
 from ..money import fmt_money, round_k
@@ -66,7 +67,7 @@ SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024
 MY_LIMIT = 100
 CATALOG_PAGE_MAX = 50
 # Texts the page needs, by key prefix. Everything else stays on the server.
-CLIENT_TEXT_PREFIXES = ("app.", "city.", "status.", "commission.note")
+CLIENT_TEXT_PREFIXES = ("app.", "city.", "status.")
 
 # Per-request context. Newer aiohttp wants typed keys; older versions only know strings.
 CTX = web.RequestKey("ctx", Ctx) if hasattr(web, "RequestKey") else "ctx"
@@ -104,8 +105,14 @@ def price_total(listing: dict[str, Any]) -> int:
     return listing["price"]
 
 
+def seller_view(listing: dict[str, Any], seller: dict[str, Any] | None) -> dict[str, Any]:
+    """How buyers reach the seller: the name and phone from the listing, today's Telegram username."""
+    return {"name": listing["seller_name"], "phone": listing["seller_phone"],
+            "username": (seller or {}).get("username"), "user_id": listing["seller_id"]}
+
+
 def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = None) -> dict[str, Any]:
-    """Only what a buyer may see — never the seller's identity, contacts or screenshot."""
+    """What a buyer sees in the list — the contacts come with the listing itself, the screenshot never."""
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["kind"] = listing["kind"]  # the promo code itself is never public
@@ -122,7 +129,7 @@ def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = Non
 def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
     status = listing["status"]
     expired = status == LS.APPROVED and Repo.is_expired(listing)
-    c = ctx.commission(listing["price"], percent=ctx.repo.listing_percent(listing))
+    unpaid = status == LS.UNPAID and Repo.fee_due(listing)
     return {
         **public_view(listing, ctx.repo.fit_prices),
         # the seller's own answers, to edit them: never in the public view
@@ -130,20 +137,18 @@ def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
         "monthly_payment": listing["monthly_payment"] if listing["paid_in_full"] == 0 else None,
         "payments_left": listing["payments_left"] if listing["paid_in_full"] == 0 else None,
         "promo_code": listing["promo_code"],
-        "percent": c.percent,  # the rate this listing was accepted at
-        "rate_changed": c.percent != ctx.percent(listing["kind"]),  # editing means accepting today's rate
         "status": "expired" if expired else status,
         "reject_reason": listing["reject_reason"] if status == LS.REJECTED else None,
-        "sale_reported": bool(listing["sale_reported_at"]) and status in (LS.APPROVED, LS.RESERVED),
+        "fee": listing["fee_amount"] or 0,
+        "fee_due": Repo.fee_due(listing),  # an edit sends it back unpaid until it is paid
+        "can_pay": unpaid and bool(ctx.cfg.payment_token),
         "seller_name": listing["seller_name"],
         "seller_phone": listing["seller_phone"],
         "has_screenshot": bool(listing["screenshot_file_id"]),
         "screenshot_count": len(Repo.screenshot_ids(listing)),
-        "commission": c.commission,
-        "net": c.net,
         "can_edit": status in LS.SELLER_EDITABLE,
-        "can_withdraw": status in (LS.PENDING, LS.APPROVED),
-        "can_report": status in (LS.APPROVED, LS.RESERVED) and not listing["sale_reported_at"],
+        "can_withdraw": status in LS.SELLER_WITHDRAWABLE,
+        "can_sold": status in LS.SELLER_SELLABLE and not expired,
     }
 
 
@@ -168,9 +173,9 @@ class WebApp:
         r.add_post("/api/advice", self.advice)
         r.add_get(r"/api/listings/{id:\d+}", self.listing)
         r.add_put(r"/api/listings/{id:\d+}", self.update)
-        r.add_post(r"/api/listings/{id:\d+}/request", self.request_purchase)
+        r.add_post(r"/api/listings/{id:\d+}/invoice", self.invoice)
         r.add_post(r"/api/listings/{id:\d+}/withdraw", self.withdraw)
-        r.add_post(r"/api/listings/{id:\d+}/report", self.report)
+        r.add_post(r"/api/listings/{id:\d+}/sold", self.sold)
         return app
 
     @web.middleware
@@ -253,14 +258,15 @@ class WebApp:
             "lang": ctx.lang,
             "langs": [{"code": code, "name": self.i18n.t(code, f"lang.{code}")} for code in LANGS],
             "texts": texts,
-            "vars": {"operator": self.cfg.operator, "percent": self.cfg.commission_percent,
-                     "promo_percent": self.cfg.promo_commission_percent, "fees": ctx.fees(),
+            "vars": {"operator": self.cfg.operator, "fee": self.cfg.listing_fee if self.cfg.fee_enabled else 0,
+                     "fee_text": ctx.fee_text(),
                      "promo_enabled": self.cfg.promo_enabled, "auto_price": self.cfg.auto_price,
                      "discount": DISCOUNT_PERCENT, "shot_required": self.cfg.screenshot_required,
                      "ocr": self.ocr_on},
             "support_url": self.cfg.support_url,
             "cities": list(CITIES),
-            "user": {"name": ctx.user.get("contact_name") or "", "phone": ctx.user.get("contact_phone") or ""},
+            "user": {"name": ctx.user.get("contact_name") or ctx.user.get("tg_name") or "",
+                     "phone": ctx.user.get("contact_phone") or "", "username": ctx.user.get("username") or ""},
             "limits": {
                 "price_min": PRICE_MIN, "price_max": PRICE_MAX, "desc_max": DESC_MAX,
                 "tariff_max": TARIFF_MAX, "name_max": NAME_MAX,
@@ -310,24 +316,9 @@ class WebApp:
             return web.json_response({"listing": own_view(ctx, listing), "own": True})
         if not self.repo.is_available(listing):
             raise ApiError(404, "not_available", ctx.t("common.not_available"))
-        requested = bool(await self.repo.active_request(listing_id, ctx.user_id))
-        return web.json_response({"listing": public_view(listing, self.repo.fit_prices), "own": False, "requested": requested})
-
-    async def request_purchase(self, request: web.Request) -> web.Response:
-        ctx = request[CTX]
-        listing_id = int(request.match_info["id"])
-        body = await self._json(request)
-        name = self._field(ctx, "name", parse_name, body.get("name"))
-        phone = self._field(ctx, "phone", normalize_phone, body.get("phone"))
-        try:
-            request_id = await self.repo.create_request(listing_id, ctx.user_id, name, phone)
-        except RepoError as e:
-            key = {"own": "buy.own", "duplicate": "buy.duplicate"}.get(e.code, "common.not_available")
-            raise ApiError(409, e.code, ctx.t(key, id=listing_id)) from None
-        await self.repo.save_contact(ctx.user_id, name, phone)
-        await self._notify_admins(ctx, "admin.n.new_request", listing_id, action="reqs",
-                                  rid=request_id, name=esc(name), phone=esc(phone))
-        return web.json_response({"request_id": request_id})
+        view = public_view(listing, self.repo.fit_prices)
+        view["seller"] = seller_view(listing, await self.repo.get_user(listing["seller_id"]))
+        return web.json_response({"listing": view, "own": False})
 
     # ------------------------------------------------------------------ selling
     @staticmethod
@@ -398,10 +389,6 @@ class WebApp:
             raise ApiError(400, "price_suspicious", ctx.t(
                 "app.err.price_suspicious", price=fmt_money(draft["price"]), month=fmt_money(a.month_cost(draft["price"])),
                 fit_month=fmt_money(a.fit_month)), "price")
-        # The seller ticks the consent for one exact price; a different price means no consent.
-        if body.get("accepted_price") != draft["price"]:
-            raise ApiError(400, "commission_not_accepted", ctx.t("app.err.accept"), "accept")
-        draft["commission_accepted_price"] = draft["price"]
 
         # Up to 3 screenshots: {file_id, sig} for a new upload, "keep" for the ones already on the listing.
         shots = body.get("screenshots")
@@ -433,16 +420,9 @@ class WebApp:
         return draft
 
     def _seller_contact(self, ctx: Ctx, body: dict[str, Any], existing: dict[str, Any] | None) -> tuple[str, str]:
-        """The sell form no longer asks for a name and phone: the operator reaches the seller in Telegram.
-        Older app versions still send them, and then they are checked as before."""
-        if body.get("name") is not None or body.get("phone") is not None:
-            return (self._field(ctx, "name", parse_name, body.get("name")),
-                    self._field(ctx, "phone", normalize_phone, body.get("phone")))
-        if existing:
-            return existing["seller_name"], existing["seller_phone"]
-        u = ctx.user
-        name = (u.get("contact_name") or u.get("tg_name") or "").strip()[:60] or f"Telegram {ctx.user_id}"
-        return name, u.get("contact_phone") or ""
+        """The name and phone every buyer sees: both required, both checked like in the bot."""
+        return (self._field(ctx, "name", parse_name, body.get("name")),
+                self._field(ctx, "phone", normalize_phone, body.get("phone")))
 
     def _membership_fields(self, ctx: Ctx, body: dict[str, Any], draft: dict[str, Any], number) -> None:
         """The 1Fit tariff, the start date and how the membership is paid: fully or in installments."""
@@ -545,11 +525,35 @@ class WebApp:
         ctx = request[CTX]
         draft = self._draft(ctx, await self._json(request))
         await self._add_reads(ctx, draft)
-        listing_id = await self.repo.create_listing(ctx.user_id, ctx.lang, draft)
-        if draft["seller_phone"]:
-            await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
+        fee = self.cfg.listing_fee if self.cfg.fee_enabled else 0
+        listing_id = await self.repo.create_listing(ctx.user_id, ctx.lang, draft, fee=fee)
+        await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
+        listing = await self.repo.get_listing(listing_id)
+        if listing["status"] == LS.UNPAID:  # the admins hear about it once it is paid
+            return web.json_response({"id": listing_id, "invoice_url": await self._invoice_url(ctx, listing)},
+                                     status=201)
         await self._notify_admins(ctx, "admin.n.new_listing", listing_id)
         return web.json_response({"id": listing_id}, status=201)
+
+    async def _invoice_url(self, ctx: Ctx, listing: dict[str, Any]) -> str | None:
+        """None when Telegram does not answer: the listing is saved, the seller pays later from «My listings»."""
+        try:
+            return await fee_invoice_link(self.bot, ctx, listing)
+        except TelegramAPIError as e:
+            log.warning("could not make an invoice for listing %s: %s", listing["id"], e)
+            return None
+
+    async def invoice(self, request: web.Request) -> web.Response:
+        ctx = request[CTX]
+        listing_id = int(request.match_info["id"])
+        listing = await self._own(ctx, listing_id)
+        problem = await self.repo.fee_problem(listing_id, ctx.user_id)
+        if problem or not self.cfg.payment_token:
+            raise ApiError(409, problem or "off", ctx.t(f"pay.err.{problem or 'off'}"))
+        url = await self._invoice_url(ctx, listing)
+        if not url:
+            raise ApiError(502, "invoice", ctx.t("common.error"))
+        return web.json_response({"invoice_url": url})
 
     async def _own(self, ctx: Ctx, listing_id: int) -> dict[str, Any]:
         listing = await self.repo.get_listing(listing_id)
@@ -567,8 +571,10 @@ class WebApp:
             await self.repo.update_listing_by_seller(listing_id, ctx.user_id, ctx.lang, draft)
         except RepoError:
             raise ApiError(409, "bad_status", ctx.t("sell.edit_blocked")) from None
-        if draft["seller_phone"]:
-            await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
+        await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
+        listing = await self.repo.get_listing(listing_id)
+        if listing["status"] == LS.UNPAID:
+            return web.json_response({"id": listing_id, "invoice_url": await self._invoice_url(ctx, listing)})
         await self._notify_admins(ctx, "admin.n.edited_listing", listing_id)
         return web.json_response({"id": listing_id})
 
@@ -581,25 +587,23 @@ class WebApp:
     async def withdraw(self, request: web.Request) -> web.Response:
         ctx = request[CTX]
         listing_id = int(request.match_info["id"])
-        await self._own(ctx, listing_id)
+        was_unpaid = (await self._own(ctx, listing_id))["status"] == LS.UNPAID
         try:
-            buyers = await self.repo.withdraw_by_seller(listing_id, ctx.user_id)
+            await self.repo.withdraw_by_seller(listing_id, ctx.user_id)
         except RepoError:
             raise ApiError(409, "bad_status", ctx.t("my.cant_withdraw")) from None
-        await self.notifier.users(ctx, buyers, lambda u: (u.t("notify.request_closed", id=listing_id), None))
-        await self._notify_admins(ctx, "admin.n.withdrawn", listing_id)
+        if not was_unpaid:  # the admins never saw an unpaid one
+            await self._notify_admins(ctx, "admin.n.withdrawn", listing_id)
         return web.json_response({"listing": own_view(ctx, await self.repo.get_listing(listing_id))})
 
-    async def report(self, request: web.Request) -> web.Response:
+    async def sold(self, request: web.Request) -> web.Response:
         ctx = request[CTX]
         listing_id = int(request.match_info["id"])
         await self._own(ctx, listing_id)
         try:
-            first = await self.repo.report_sale(listing_id, ctx.user_id)
+            await self.repo.mark_sold(listing_id, ctx.user_id)
         except RepoError:
-            raise ApiError(409, "bad_status", ctx.t("my.cant_report")) from None
-        if first:
-            await self._notify_admins(ctx, "admin.n.sale_reported", listing_id)
+            raise ApiError(409, "bad_status", ctx.t("my.cant_sold")) from None
         return web.json_response({"listing": own_view(ctx, await self.repo.get_listing(listing_id))})
 
 

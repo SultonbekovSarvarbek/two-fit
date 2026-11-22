@@ -36,15 +36,17 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     await h.click(uid, "sl:pay:full")
     await h.click(uid, "sl:freeze:no")
     calc = await h.send(uid, price)
-    assert "200 000" in texts(calc) and "1 800 000" in texts(calc)
+    assert "Нарх: <b>2\xa0000\xa0000 сўм" in texts(calc) and "комиссия" not in texts(calc).lower()
     await h.send(uid, "Қолган 7 ой, зал яқин")
     await h.send(uid, photo=True)
     await h.click(uid, "sl:shotsdone:")
     await h.send(uid, "Алишер")
     preview = await h.send(uid, contact="+998901112233")
     pt = texts(preview)
-    assert "Two Fit комиссияси (10%): 200 000" in pt and "Сизга қолади: <b>1 800 000" in pt
-    assert "Фақат администратор кўради" in pt and "+998901112233" in pt
+    assert "комиссия" not in pt.lower()
+    # the contacts are public now: the seller sees them as every buyer will
+    assert "Сотувчи: <b>Алишер</b>" in pt and "+998901112233" in pt and "@user1" in pt
+    assert "барча харидорлар кўради" in pt
     assert "келишилади" not in pt
     assert "📊 Ишлатилди: 5 / 12 ой · қолди: 7 ой\n▰▰▰▰▱▱▱▱▱▱" in pt
     end = today_local() + timedelta(days=200)
@@ -53,10 +55,6 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     toggled = texts(await h.click(uid, "sl:negotiable:"))
     assert "сўм</b> · <i>келишилади</i>" in toggled
     await h.click(uid, "sl:negotiable:")  # back to a fixed price
-    # Send without accepting the commission is refused
-    refused = await h.click(uid, "sl:send:")
-    assert any("комиссияга розилигингизни" in a for a in alerts(refused))
-    await h.click(uid, "sl:accept:")
     return await h.click(uid, "sl:send:")
 
 
@@ -103,68 +101,98 @@ async def test_full_happy_path(h):
     ct = texts(card)
     assert "Объявление №1" in ct and "Ташкент" in ct and "Қолган 7 ой" in ct
     assert "⏳ Осталось: <b>7 мес.</b>" in ct and "Тариф" not in ct  # months left, not a misleading tariff name
-    assert "Укажите оператору номер объявления" in ct
-    assert "https://t.me/s_sarvar" in h.url_buttons(BUYER)
+    # --- the seller's contacts, straight on the card: a regular marketplace
+    assert "Продавец: <b>Алишер</b>" in ct and "+998901112233" in ct and "@user1" in ct
+    assert "https://t.me/user1" in h.url_buttons(BUYER)
+    assert "Не переводите деньги" in ct and "buy:" not in str([getattr(c, "reply_markup", None) for c in card])
 
     # --- city filter
     await h.click(BUYER, "cty:")
     assert "Найдено: 1" in texts(await h.click(BUYER, "cat:0:tashkent"))
     assert "В городе Бухара пока нет" in texts(await h.click(BUYER, "cat:0:bukhara"))
 
-    # --- buy
-    await h.click(BUYER, "buy:1")
-    await h.send(BUYER, "Бобур")
-    done = await h.send(BUYER, "+998 93 000 00 02")
-    assert "Заявка на объявление №1 принята" in texts(done)
-    assert "Новая заявка #1 на объявление №1" in h.texts_to(ADMIN) and "+998930000002" in h.texts_to(ADMIN)
-    assert any("уже оставили заявку" in a for a in alerts(await h.click(BUYER, "buy:1")))
-    assert any("сизнинг эълонингиз" in a for a in alerts(await h.click(SELLER, "buy:1")))
-    assert (await h.repo.get_listing(1))["status"] == LS.APPROVED  # no automatic reserve
-
-    # --- reserve, changed price, seller confirms
-    await h.click(ADMIN, "ad:reqs:1:0:")
-    await h.click(ADMIN, "ad:sel:1:0:")
-    assert (await h.repo.get_listing(1))["status"] == LS.RESERVED
-    assert "харидор топилди" in h.texts_to(SELLER)
-    assert "зарезервирован" in h.texts_to(BUYER)
-    assert "Пока нет" in texts(await h.send(STRANGER, "🏋️ Все абонементы"))  # reserved = hidden
-    await h.click(ADMIN, "ad:fp:1:0:")
-    await h.send(ADMIN, "1 800 000")
-    assert "Якуний нарх" not in h.texts_to(ADMIN)  # admin speaks Russian
-    seller_text = h.texts_to(SELLER)
-    assert "якуний нарх ўзгарди" in seller_text and "180 000" in seller_text and "1 620 000" in seller_text
-    refused = await h.click(ADMIN, "ad:close:1:0:")
-    assert any("подтверждения продавца" in a for a in alerts(refused))
-    await h.click(SELLER, h.button(SELLER, "Тасдиқлайман"))
-    assert "Продавец подтвердил итоговую цену" in h.texts_to(ADMIN)
-
-    # --- close deal once, commission once
-    await h.click(ADMIN, "ad:close:1:0:")
-    closed = await h.click(ADMIN, "ad:close!:1:0:")
-    assert "Сделка #1" in texts(closed) and "⏳ ожидается" in texts(closed)
-    assert "битим ёпилди" in h.texts_to(SELLER) and "Сделка по объявлению №1 закрыта" in h.texts_to(BUYER)
-    assert any("уже сделано" in a for a in alerts(await h.click(ADMIN, "ad:close!:1:0:")))
-    await h.click(ADMIN, "ad:paid:1:0:")
-    await h.click(ADMIN, "ad:paid!:1:0:")
-    assert any("уже сделано" in a for a in alerts(await h.click(ADMIN, "ad:paid!:1:0:")))
-    stats = texts(await h.click(ADMIN, "ad:stats:0:0:"))
-    assert "Закрытых сделок: 1" in stats and "Получено комиссии: 180 000" in stats
-    assert "Ожидает оплаты: 0" in stats and "Общая стоимость сделок: 1 800 000" in stats
-
-    # sold listing is gone from the catalog, history stays
+    # --- the seller sold it: gone from the catalog
+    await h.click(SELLER, "my:sold:1:0")
+    sold = await h.click(SELLER, "my:sold!:1:0")
+    assert "каталогдан олинди" in texts(sold)
+    assert (await h.repo.get_listing(1))["status"] == LS.SOLD
     assert "Пока нет" in texts(await h.send(BUYER, "🏋️ Все абонементы"))
-    assert (await h.repo.deal_for_listing(1))["commission_status"] == "paid"
-    # old card button after the sale
-    stale = await h.click(BUYER, "card:1:0:")
-    assert any("недоступно" in a for a in alerts(stale))
+    assert any("недоступно" in a for a in alerts(await h.click(BUYER, "card:1:0:")))
+    stats = texts(await h.click(ADMIN, "ad:stats:0:0:"))
+    assert "Продано: 1" in stats and "Оплат размещения: 0" in stats
 
-    # --- privacy: neither side ever saw the other's data
-    buyer_seen = h.texts_to(BUYER)
-    for secret in ("+998901112233", "Алишер", "@user1", "shot-1"):
-        assert secret not in buyer_seen
-    seller_seen = h.texts_to(SELLER)
-    for secret in ("+998930000002", "Бобур", "@user2"):
-        assert secret not in seller_seen
+
+async def test_listing_fee_is_paid_before_moderation(tmp_path):
+    h = await Harness(tmp_path / "fee.db", fee=30_000, payment_token="CLICK:TEST").start()
+    try:
+        await choose_lang(h, SELLER, "uz")
+        await choose_lang(h, ADMIN, "ru")
+        assert "Эълон жойлаш — 30\xa0000 сўм, бир марта" in texts(await h.send(SELLER, "/start"))
+        assert "30\xa0000 сўм" in texts(await h.send(SELLER, "➕ Абонемент сотиш"))
+        await h.send(SELLER, "/start")
+        sent = await create_listing(h)
+        invoices = [c for c in sent if type(c).__name__ == "SendInvoice"]
+        assert len(invoices) == 1
+        inv = invoices[0]
+        assert (inv.currency, inv.prices[0].amount, inv.payload, inv.provider_token) == \
+            ("UZS", 3_000_000, "fee:1", "CLICK:TEST")
+        assert "тўлаш қолди" in texts(sent)
+        assert (await h.repo.get_listing(1))["status"] == LS.UNPAID
+        assert "Новое объявление" not in h.texts_to(ADMIN)  # not before the payment
+
+        # Telegram asks first: a wrong sum, someone else's listing, a strange payload are refused
+        def answer(calls):
+            return next(c for c in calls if type(c).__name__ == "AnswerPreCheckoutQuery")
+        assert answer(await h.pre_checkout(SELLER, "fee:1", 1_000_000)).ok is False
+        assert answer(await h.pre_checkout(STRANGER, "fee:1", 3_000_000)).ok is False
+        assert answer(await h.pre_checkout(SELLER, "nonsense", 3_000_000)).ok is False
+        assert answer(await h.pre_checkout(SELLER, "fee:1", 3_000_000)).ok is True
+
+        paid = await h.pay(SELLER, "fee:1", 3_000_000)
+        assert "30\xa0000 сўм тўлов қабул қилинди" in texts(paid)
+        listing = await h.repo.get_listing(1)
+        assert listing["status"] == LS.PENDING and listing["fee_paid_at"]
+        assert "Новое объявление №1" in h.texts_to(ADMIN)
+        assert "Оплачено размещение: 30\xa0000" in h.texts_to(ADMIN)
+        assert "Размещение оплачено: 30\xa0000" in texts(await h.click(ADMIN, "ad:open:1:0:"))
+        # the same payment reported twice changes nothing
+        assert texts(await h.pay(SELLER, "fee:1", 3_000_000)) == ""
+        assert answer(await h.pre_checkout(SELLER, "fee:1", 3_000_000)).ok is False  # already paid
+        stats = texts(await h.click(ADMIN, "ad:stats:0:0:"))
+        assert "Оплат размещения: 1" in stats and "Получено: 30\xa0000" in stats
+
+        # editing after the payment is free: straight back to moderation
+        await h.click(ADMIN, "ad:appr:1:0:")
+        await h.click(SELLER, "my:edit:1:0")
+        await h.click(SELLER, "sl:edit:")
+        await h.click(SELLER, "sl:field:desc")
+        again = await h.send(SELLER, "Янги тавсиф")
+        assert "тўлаб юбориш" not in str([c.reply_markup for c in again])
+        resent = await h.click(SELLER, "sl:send:")
+        assert not [c for c in resent if type(c).__name__ == "SendInvoice"]
+        assert (await h.repo.get_listing(1))["status"] == LS.PENDING
+    finally:
+        await h.stop()
+
+
+async def test_unpaid_listing_can_be_paid_later(tmp_path):
+    h = await Harness(tmp_path / "later.db", fee=30_000, payment_token="CLICK:TEST").start()
+    try:
+        await choose_lang(h, SELLER, "uz")
+        await create_listing(h)
+        card = texts(await h.click(SELLER, "my:open:1:0"))
+        assert "Эълон жойлаш тўланмаган: 30\xa0000 сўм" in card
+        again = await h.click(SELLER, "my:pay:1:0")
+        assert [c for c in again if type(c).__name__ == "SendInvoice"]
+        await choose_lang(h, STRANGER, "ru")
+        assert alerts(await h.click(STRANGER, "my:pay:1:0")) == ["Объявление не найдено."]
+        # withdrawn while unpaid: it never reached the admins and still owes the fee
+        await h.click(SELLER, "my:wd!:1:0")
+        assert (await h.repo.get_listing(1))["status"] == LS.WITHDRAWN
+        assert alerts(await h.click(SELLER, "my:pay:1:0"))
+    finally:
+        await h.stop()
+
 
 
 async def test_wizard_navigation_and_validation(h):
@@ -187,17 +215,15 @@ async def test_wizard_navigation_and_validation(h):
     await h.send(SELLER, "Алишер")
     assert "Не удалось распознать номер" in texts(await h.send(SELLER, "12"))
     await h.send(SELLER, "+998901112233")
-    # change the price from the preview -> acceptance is reset and must be given again
-    await h.click(SELLER, "sl:accept:")
+    # change the price from the preview, then send: nothing to accept, no fee while payments are off
     await h.click(SELLER, "sl:edit:")
     await h.click(SELLER, "sl:field:price")
     changed = await h.send(SELLER, "2 500 000")
-    assert "Цена изменилась" in texts(changed) and "☐ Согласен" in str([c.reply_markup for c in changed])
-    assert any("подтвердите согласие" in a for a in alerts(await h.click(SELLER, "sl:send:")))
-    await h.click(SELLER, "sl:accept:")
+    assert "Цена: <b>2\xa0500\xa0000 сум" in texts(changed)
+    assert "📤 Отправить" in str([c.reply_markup for c in changed])
     await h.click(SELLER, "sl:send:")
     listing = await h.repo.get_listing(1)
-    assert listing["price"] == 2_500_000 and listing["commission_accepted_price"] == 2_500_000
+    assert listing["price"] == 2_500_000 and listing["status"] == LS.PENDING
     assert listing["description"] == "" and listing["screenshot_file_id"] is None
     # main-menu buttons work from anywhere and cancel the wizard
     await h.send(SELLER, "➕ Продать абонемент")
@@ -206,7 +232,7 @@ async def test_wizard_navigation_and_validation(h):
     assert "Выберите действие" in texts(await h.send(SELLER, "Годовой"))  # wizard was cancelled
 
 
-async def test_my_listings_edit_withdraw_report(h):
+async def test_my_listings_edit_withdraw(h):
     await choose_lang(h, SELLER, "uz")
     await choose_lang(h, ADMIN, "ru")
     await create_listing(h)
@@ -221,16 +247,12 @@ async def test_my_listings_edit_withdraw_report(h):
     await h.click(SELLER, "sl:edit:")
     await h.click(SELLER, "sl:field:desc")
     await h.send(SELLER, "Тоза тавсиф")
-    await h.click(SELLER, "sl:send:")  # price unchanged -> acceptance kept
+    await h.click(SELLER, "sl:send:")
     assert "қайта текширувга" in h.texts_to(SELLER)
     assert (await h.repo.get_listing(1))["status"] == LS.PENDING
     assert "изменено и ждёт повторной модерации" in h.texts_to(ADMIN)
 
     await h.click(ADMIN, "ad:appr:1:0:")
-    await h.click(SELLER, "my:rep:1:0")
-    await h.click(SELLER, "my:rep!:1:0")
-    assert "сообщил о продаже" in h.texts_to(ADMIN)
-    assert (await h.repo.get_listing(1))["status"] == LS.APPROVED  # only admin closes the deal
 
     # someone else cannot touch my listing
     await choose_lang(h, STRANGER, "ru")
@@ -305,7 +327,6 @@ async def test_installment_wizard_and_card(h):
     assert "💰 Цена: <b>4\xa0800\xa0000 сум</b>" in preview
     assert "Рассрочка" not in preview  # buyers never see the installments, only the whole sum
     assert "❄️ Заморозка: осталось 20 дн." in preview
-    await h.click(SELLER, "sl:accept:")
     await h.click(SELLER, "sl:send:")
     listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
     assert (listing["paid_in_full"], listing["monthly_payment"], listing["payments_left"]) == (0, 500_000, 9)
@@ -337,9 +358,9 @@ async def test_promo_code_wizard(h):
     assert "Шаг 4/8" in ask_code and "Сам промокод" in ask_code  # no start date, no payment question
     assert "одно слово" in texts(await h.send(SELLER, "два слова"))
     ask_price = texts(await h.send(SELLER, "FIT-2026"))
-    assert "Цена промокода" in ask_price and "30%" in ask_price
+    assert "Цена промокода" in ask_price and "%" not in ask_price
     calc = texts(await h.send(SELLER, "100 000"))
-    assert "Комиссия Two Fit (30%): 30\xa0000" in calc and "70\xa0000" in calc
+    assert "Цена: <b>100\xa0000 сум" in calc
     assert "Шаг 5/8" in texts(await h.click(SELLER, "sl:back:"))  # from the description back to the price
     await h.send(SELLER, "100 000")
     await h.click(SELLER, "sl:skip:")
@@ -348,7 +369,6 @@ async def test_promo_code_wizard(h):
     preview = texts(await h.send(SELLER, contact="+998901112233"))
     assert "🎁 промокод 1Fit" in preview and "Что даёт: Безлимит на 1 месяц" in preview
     assert "Промокод: <code>FIT-2026</code>" in preview  # in the private block
-    await h.click(SELLER, "sl:accept:")
     await h.click(SELLER, "sl:send:")
     listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
     assert (listing["kind"], listing["promo_code"], listing["price"]) == ("promo", "FIT-2026", 100_000)
