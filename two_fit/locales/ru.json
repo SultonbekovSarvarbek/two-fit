@@ -509,5 +509,9 @@
   "admin.askprice.confirm": "Отправить просьбу обновить цену {sellers} продавцам ({listings} объявлений: опубликованные и на модерации)?\n\nТак выглядит сообщение:",
   "admin.askprice.none": "Нет продавцов с опубликованными объявлениями или объявлениями на модерации.",
   "admin.askprice.sending": "Отправляю…",
-  "admin.askprice.done": "✅ Отправлено: {sent}. Не доставлено: {failed} (продавец заблокировал бота)."
+  "admin.askprice.done": "✅ Отправлено: {sent}. Не доставлено: {failed} (продавец заблокировал бота).",
+  "sell.instagram": "📸 Подпишитесь, пожалуйста, на наш Instagram — там новости 2FIT и свежие абонементы. Спасибо!",
+  "sell.instagram_btn": "📸 Подписаться на Instagram 2FIT",
+  "app.sell.instagram": "Подпишитесь, пожалуйста, на наш Instagram — там новости 2FIT и свежие абонементы.",
+  "app.sell.instagram_btn": "Подписаться на Instagram"
 }

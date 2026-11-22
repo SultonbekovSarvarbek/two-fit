@@ -32,6 +32,7 @@ class Config:
     fit_api_url: str = "https://api-uz.1fit.app/api/landing/v2/subscriptions/?city_id=1"
     fit_watch_times: str = "08:00,11:00,14:00,17:00,20:00"  # Tashkent time
     # The seller pays once to place a listing (Telegram Payments: Click or Payme). Off without a provider token.
+    instagram_url: str = "https://www.instagram.com/2fit_uz/"  # sellers are asked to follow it; empty: not asked
     listing_fee: int = 30000  # сум
     payment_token: str = ""   # provider token from @BotFather → Payments
 
@@ -85,6 +86,7 @@ def load_config() -> Config:
         fit_watch=os.getenv("FIT_WATCH", "1").strip().lower() not in ("0", "false", "no", "off", ""),
         fit_api_url=os.getenv("FIT_API_URL", "").strip() or Config.fit_api_url,
         fit_watch_times=os.getenv("FIT_WATCH_TIMES", "").strip() or Config.fit_watch_times,
+        instagram_url=os.getenv("INSTAGRAM_URL", Config.instagram_url).strip(),
         listing_fee=int(os.getenv("LISTING_FEE", "30000") or 0),
         payment_token=os.getenv("PAYMENT_PROVIDER_TOKEN", "").strip(),
     )

@@ -959,6 +959,11 @@ function sellForm(d, onDone, onKind) {
     h("h2", null, T("app.sell.contacts")),
     h("div", { class: "card" }, fields.name, fields.phone),
     d.fee ? h("p", { class: "note" }, "💳 " + T("app.sell.fee", { fee: money(d.fee) })) : null,
+    !d.id && B.vars.instagram ? h("div", { class: "card stack", style: "padding:14px 16px" },
+      h("div", null, "📸 " + T("app.sell.instagram")),
+      h("button", { class: "btn ghost", type: "button", onclick: () => {
+        try { tg.openLink(B.vars.instagram); } catch (e) { window.open(B.vars.instagram, "_blank"); }
+      } }, T("app.sell.instagram_btn"))) : null,
     submit);
   drawCounter(); drawKind(); drawShot();
   return form;

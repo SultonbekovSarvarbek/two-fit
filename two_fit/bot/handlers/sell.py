@@ -958,13 +958,22 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
         # Saved, but the admins see it only once it is paid (payments handler).
         await call.message.answer(ctx.t("sell.pay_now", id=listing_id, fee=fmt_money(listing["fee_amount"])),
                                   reply_markup=main_menu(ctx))
-        await send_fee_invoice(call.bot, ctx, ctx.user_id, listing)
+        await ask_instagram(call.message, ctx, data)
+        await send_fee_invoice(call.bot, ctx, ctx.user_id, listing)  # last, so the «Pay» button is at the bottom
         return
     await call.message.answer(ctx.t(done_key, id=listing_id), reply_markup=main_menu(ctx))
+    await ask_instagram(call.message, ctx, data)
     await notifier.admins(ctx, lambda a: (
         a.t(admin_key, id=listing_id),
         kb([btn(a.t("admin.open_btn", id=listing_id), AdmCb(action="open", id=listing_id))]),
     ))
+
+
+async def ask_instagram(message: Message, ctx: Ctx, data: dict) -> None:
+    """A new listing: ask the seller to follow 2FIT on Instagram (not again on every edit)."""
+    if ctx.cfg.instagram_url and data.get("mode") != "edit":
+        await message.answer(ctx.t("sell.instagram"),
+                             reply_markup=kb([btn(ctx.t("sell.instagram_btn"), url=ctx.cfg.instagram_url)]))
 
 
 # Text typed while a button is expected (kind / city / payment / preview / field menu).

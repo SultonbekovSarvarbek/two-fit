@@ -509,5 +509,9 @@
   "admin.askprice.confirm": "Нархни янгилаш ҳақидаги илтимос {sellers} та сотувчига юборилсинми ({listings} та эълон: эълон қилинган ва текширувдагилар)?\n\nХабар шундай кўринади:",
   "admin.askprice.none": "Эълон қилинган ёки текширувдаги эълонлари бор сотувчилар йўқ.",
   "admin.askprice.sending": "Юборилмоқда…",
-  "admin.askprice.done": "✅ Юборилди: {sent}. Етказилмади: {failed} (сотувчи ботни блоклаган)."
+  "admin.askprice.done": "✅ Юборилди: {sent}. Етказилмади: {failed} (сотувчи ботни блоклаган).",
+  "sell.instagram": "📸 Илтимос, Instagram саҳифамизга обуна бўлинг — у ерда 2FIT янгиликлари ва янги абонементлар. Раҳмат!",
+  "sell.instagram_btn": "📸 2FIT Instagram'ига обуна бўлиш",
+  "app.sell.instagram": "Илтимос, Instagram саҳифамизга обуна бўлинг — у ерда 2FIT янгиликлари ва янги абонементлар.",
+  "app.sell.instagram_btn": "Instagram'га обуна бўлиш"
 }

@@ -259,7 +259,7 @@ class WebApp:
             "langs": [{"code": code, "name": self.i18n.t(code, f"lang.{code}")} for code in LANGS],
             "texts": texts,
             "vars": {"operator": self.cfg.operator, "fee": self.cfg.listing_fee if self.cfg.fee_enabled else 0,
-                     "fee_text": ctx.fee_text(),
+                     "fee_text": ctx.fee_text(), "instagram": self.cfg.instagram_url,
                      "promo_enabled": self.cfg.promo_enabled, "auto_price": self.cfg.auto_price,
                      "discount": DISCOUNT_PERCENT, "shot_required": self.cfg.screenshot_required,
                      "ocr": self.ocr_on},

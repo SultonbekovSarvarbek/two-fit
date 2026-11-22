@@ -76,6 +76,9 @@ async def test_full_happy_path(h):
     # --- sell
     sent = await create_listing(h)
     assert "№1 эълон текширувга юборилди" in texts(sent)
+    # a new listing: the seller is asked to follow 2FIT on Instagram
+    assert "Instagram саҳифамизга обуна бўлинг" in texts(sent)
+    assert "https://www.instagram.com/2fit_uz/" in h.url_buttons(SELLER)
     assert "Новое объявление №1" in h.texts_to(ADMIN)
     assert (await h.repo.get_listing(1))["status"] == LS.PENDING
     # not in catalog until approved
@@ -136,7 +139,8 @@ async def test_listing_fee_is_paid_before_moderation(tmp_path):
         inv = invoices[0]
         assert (inv.currency, inv.prices[0].amount, inv.payload, inv.provider_token) == \
             ("UZS", 3_000_000, "fee:1", "CLICK:TEST")
-        assert "тўлаш қолди" in texts(sent)
+        assert "тўлаш қолди" in texts(sent) and "Instagram" in texts(sent)
+        assert type(sent[-1]).__name__ == "SendInvoice"  # the invoice stays at the bottom of the chat
         assert (await h.repo.get_listing(1))["status"] == LS.UNPAID
         assert "Новое объявление" not in h.texts_to(ADMIN)  # not before the payment
 
@@ -170,6 +174,7 @@ async def test_listing_fee_is_paid_before_moderation(tmp_path):
         assert "тўлаб юбориш" not in str([c.reply_markup for c in again])
         resent = await h.click(SELLER, "sl:send:")
         assert not [c for c in resent if type(c).__name__ == "SendInvoice"]
+        assert "Instagram" not in texts(resent)  # asked once, not on every edit
         assert (await h.repo.get_listing(1))["status"] == LS.PENDING
     finally:
         await h.stop()
