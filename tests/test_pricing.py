@@ -379,21 +379,8 @@ async def test_catalog_explains_the_saving(h, api):  # noqa: F811
     assert set(m) == {"total", "fit_total", "saving", "saved"}
     assert m["total"] % 1000 == 0 and m["fit_total"] % 1000 == 0 and m["saved"] > 0
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
-    assert "app.badge.saving" in boot["texts"] and not any(k.startswith("app.mc.") for k in boot["texts"])
+    assert not any(k.startswith("app.mc.") or k == "app.badge.saving" for k in boot["texts"])
 
-
-
-async def test_bot_catalog_button_shows_the_saving(h):
-    from two_fit.bot.context import Ctx
-    from two_fit.bot.ui import saving_mark
-    from two_fit.i18n import I18n
-    ctx = Ctx(h.repo, I18n(), h.cfg, {"id": SELLER, "lang": "ru"})
-    end = (today_local() + timedelta(days=300)).isoformat()
-    a = advise(end, today_local(), plan_days=365)
-    base = {"kind": "membership", "end_date": end, "tariff_days": 365, "paid_in_full": True}
-    assert saving_mark(ctx, {**base, "price": a.recommended}) == f" · 🔥 −{a.saving(a.recommended)}%"
-    assert saving_mark(ctx, {**base, "price": 300_000}) == ""            # suspicious: no boasting
-    assert saving_mark(ctx, {**base, "price": round(a.fit_value)}) == ""  # no saving at all
 
 
 def test_start_and_end_must_fit_the_tariff():

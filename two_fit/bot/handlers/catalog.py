@@ -10,7 +10,7 @@ from ...money import fmt_money
 from ..callbacks import CardCb, CatCb, CityMenuCb
 from ..context import Ctx
 from ..middlewares import Btn
-from ..ui import btn, buyer_total, esc, kb, listing_public, pager, pages_count, saving_mark, seller_contacts
+from ..ui import btn, buyer_total, esc, kb, listing_public, pager, pages_count, seller_contacts
 
 router = Router(name="catalog")
 
@@ -40,8 +40,7 @@ async def render_catalog(ctx: Ctx, page: int, city: str) -> tuple[str, InlineKey
     item_rows = [
         [btn(
             ctx.t("catalog.item", id=r["id"], city=ctx.i18n.city(ctx.lang, r["city"]), price=fmt_money(buyer_total(r)))
-            + (ctx.t("catalog.promo") if r["kind"] == "promo" else "")
-            + saving_mark(ctx, r),
+            + (ctx.t("catalog.promo") if r["kind"] == "promo" else ""),
             CardCb(id=r["id"], page=page, city=city),
         )]
         for r in rows
