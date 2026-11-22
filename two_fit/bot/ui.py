@@ -160,7 +160,7 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
         left=left_text(ctx, data["end_date"]),
         date=fmt_day(ctx, data["end_date"]),
         usage="" if promo else usage_line(ctx, data),
-        price=fmt_money(data["price"]),
+        price=fmt_money(buyer_total(data)),  # what the buyer pays in all: the price plus the installments
     )
     if data.get("price_negotiable"):
         text += ctx.t("card.negotiable")
@@ -222,6 +222,15 @@ def month_line(ctx: Ctx, data: dict[str, Any]) -> str:
                  saving=a.saving(price), saved=fmt_money(round_k(a.saved(price))))
 
 
+def buyer_total(data: dict[str, Any]) -> int:
+    """The price plus the installments the buyer still pays 1Fit: «580 000» with 9 × 533 333 due is 5 380 000."""
+    price = data.get("price") or 0
+    if data.get("paid_in_full") is not None and not data["paid_in_full"] and data.get("monthly_payment") \
+            and data.get("payments_left"):
+        return price + data["monthly_payment"] * data["payments_left"]
+    return price
+
+
 def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:
     """Fully paid or installment, so «500 000» is never mistaken for the whole price. Empty for old listings."""
     paid = data.get("paid_in_full")
@@ -232,7 +241,8 @@ def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:
     monthly, left = data.get("monthly_payment"), data.get("payments_left")
     if not (monthly and left):
         return ""
-    return ctx.t("card.installment", monthly=fmt_money(monthly), left=left, total=fmt_money(monthly * left))
+    return ctx.t("card.installment", price=fmt_money(data.get("price") or 0), monthly=fmt_money(monthly), left=left,
+                 total=fmt_money(monthly * left))
 
 
 def commission_block(ctx: Ctx, price: int, kind: str | None = None, percent: int | None = None) -> str:

@@ -472,7 +472,7 @@ function listingRow(l, onclick, extra) {
       h("div", { class: "title" }, isPromo(l) ? l.tariff : leftText(l, "app.left_title")),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
       usageBar(l), extra || [promoBadge(l), priceBadge(l), " ", payBadge(l)], monthCost(l)),
-    h("div", { class: "price num" }, money(l.price), h("small", null, T("app.sum"))));
+    h("div", { class: "price num" }, money(buyerTotal(l)), h("small", null, T("app.sum"))));
 }
 function cheapestFlag() {
   const flag = h("span", { class: "flag" }, T("app.badge.cheapest"));
@@ -493,7 +493,9 @@ function usageBar(l, big) {
 const priceBadge = (l) => h("span", { class: "badge ptype " + (l.price_negotiable ? "deal" : "fixed") },
   T(l.price_negotiable ? "app.badge.negotiable" : "app.badge.fixed"));
 const installment = (l) => l.paid_in_full === false && l.monthly_payment && l.payments_left;
-const installmentVars = (l) => ({ monthly: money(l.monthly_payment), left: l.payments_left, total: money(l.monthly_payment * l.payments_left) });
+const installmentVars = (l) => ({ price: money(l.price), monthly: money(l.monthly_payment), left: l.payments_left, total: money(l.monthly_payment * l.payments_left) });
+// What the buyer pays in all: the price plus the installments still due to 1Fit. Shown as the price.
+const buyerTotal = (l) => l.price + (installment(l) ? l.monthly_payment * l.payments_left : 0);
 const isPromo = (l) => l.kind === "promo";
 // Months left instead of a tariff name: «12 months» made buyers think they got all 12.
 // «52 дн.» / «7 мес.» from today to an end date — the same rule as the server's remaining().
@@ -532,7 +534,7 @@ const monthCost = (l, big) => {
   if (suspicious(l)) return h("div", { class: "month-cost warn" }, T("app.month_suspicious"));
   const vars = { total: money(m.total), fit_total: money(m.fit_total), left: leftText(l), saving: m.saving, saved: money(m.saved) };
   return big
-    ? h("div", { class: "month-cost num" }, h("b", null, T("app.mc.hero_title", vars)), h("div", null, T("app.mc.hero_text", vars)),
+    ? h("div", { class: "month-cost num" }, h("b", null, T("app.mc.hero_title", vars)),
         m.saved ? h("div", { class: "save-cta" }, "💸 " + T("app.mc.hero_save", vars)) : null)
     : h("div", { class: "month-cost num" }, T("app.mc.row_text", vars));  // the saving itself is in the badge
 };
@@ -591,7 +593,7 @@ function publicRows(l) {
 function priceHero(l) {
   return h("div", { class: "card hero" },
     h("div", { class: "label" }, T("app.f.price")),
-    h("div", { class: "value num" }, money(l.price) + " ", h("small", null, T("app.sum"))),
+    h("div", { class: "value num" }, money(buyerTotal(l)) + " ", h("small", null, T("app.sum"))),
     saveFlag(l), promoBadge(l), priceBadge(l), monthCost(l, true),
     installment(l) ? h("div", { class: "inst-note num" }, "💳 " + T("app.pay.installment_note", installmentVars(l))) : null);
 }

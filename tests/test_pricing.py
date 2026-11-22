@@ -124,7 +124,8 @@ async def test_card_shows_the_total_for_the_months_left(h):
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
     # In words: «it comes to … a month — 1Fit charges … a month; … cheaper, you save ≈ …», round sums
-    assert "Всего за " in preview and "000 сум</b> — в 1Fit" in preview and "Купите сразу и сэкономьте ≈" in preview
+    assert "💰 Цена: <b>2\xa0000\xa0000 сум</b>" in preview  # fully paid: the whole sum is the price
+    assert "📉 В 1Fit те же " in preview and "Купите сразу и сэкономьте ≈" in preview
     assert "в месяц" not in preview  # the whole sum for the months left, not a per-month figure
 
 
