@@ -5,7 +5,7 @@ import pytest
 
 from two_fit.repo import LS, today_local
 
-from .harness import Harness, alerts, texts
+from .harness import Harness, alerts, buttons_of, texts
 
 SELLER, BUYER, STRANGER, ADMIN = 1, 2, 3, 900
 END = (today_local() + timedelta(days=200)).strftime("%d.%m.%Y")
@@ -334,6 +334,19 @@ async def test_installment_wizard_and_card(h):
     assert listing["price"] == 300_000
 
 
+async def test_only_12_and_24_month_tariffs_can_be_sold(h):
+    """1Fit re-registers only 12- and 24-month memberships: no «6 months» button, an old button is refused."""
+    await choose_lang(h, SELLER, "ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
+    ask = await h.click(SELLER, "sl:city:tashkent")
+    plans = [b.callback_data for c in ask for b in buttons_of(c) if (b.callback_data or "").startswith("sl:plan:")]
+    assert plans == ["sl:plan:365", "sl:plan:730"]
+    assert "12 или 24 месяца" in texts(ask)
+    await h.click(SELLER, "sl:plan:180")
+    assert (await h.dp.storage.get_data(key=_key(h)))["draft"].get("tariff_days") is None
+
+
 async def test_fully_paid_skips_installment_questions(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
@@ -404,3 +417,8 @@ def test_stored_installment_is_not_a_suspicious_price():
     a = price_advice(ctx, stored)
     assert a.installments == 4_799_997 and not a.suspicious(10_000)
     assert price_advice(ctx, {**stored, "paid_in_full": 1}).installments == 0
+
+
+def _key(h):
+    from aiogram.fsm.storage.base import StorageKey
+    return StorageKey(bot_id=h.bot.id, chat_id=SELLER, user_id=SELLER)

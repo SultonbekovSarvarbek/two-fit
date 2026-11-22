@@ -276,8 +276,13 @@ def test_end_date_must_fit_the_tariff():
 async def test_api_needs_a_tariff_and_asks_about_a_suspicious_price(h, api):  # noqa: F811
     status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=None))
     assert (status, err["field"]) == (400, "tariff_days")
-    status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=180, end_date=(
-        today_local() + timedelta(days=400)).isoformat()))
+    # 6 months cannot be re-registered in 1Fit: only 12 or 24
+    status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=180))
+    assert (status, err["field"]) == (400, "tariff_days")
+    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
+    assert boot["limits"]["plans"] == [365, 730]
+    status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=365, end_date=(
+        today_local() + timedelta(days=500)).isoformat()))
     assert (status, err["error"], err["field"]) == (400, "bad_end_for_plan", "end_date")
 
     low = dict(price="485 000", accepted_price=485_000)

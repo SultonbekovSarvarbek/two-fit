@@ -342,6 +342,8 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
         "seller_name", "seller_phone", "monthly_payment", "payments_left", "kind", "promo_code", "tariff_days", "freeze_days",
     )}
     draft["paid_in_full"] = None if listing["paid_in_full"] is None else bool(listing["paid_in_full"])
+    if draft["tariff_days"] not in TARIFF_PLANS:  # a 6-month one listed before: the seller picks 12 or 24 months
+        draft["tariff_days"] = None
     draft["has_freeze"] = bool(listing["freeze_days"])
     draft["screenshot_file_ids"] = Repo.screenshot_ids(listing)
     draft["ocr"] = Repo.ocr_of(listing)

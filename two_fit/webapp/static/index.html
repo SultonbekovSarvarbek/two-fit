@@ -616,7 +616,7 @@ function showFieldError(fields, err) {
 function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
-        kind: l.kind, code: l.promo_code || "", plan: l.tariff_days || null,
+        kind: l.kind, code: l.promo_code || "", plan: B.limits.plans.includes(l.tariff_days) ? l.tariff_days : null,
         freeze: !!l.freeze_days, freezeDays: l.freeze_days ? String(l.freeze_days) : "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "", leftTyped: !!l.payments_left,
         name: l.seller_name, phone: l.seller_phone, shots: l.screenshot_count ? ["keep"] : [], keptShots: l.screenshot_count || 0,  // earlier screenshots stay attached
         fee: l.fee_due ? l.fee : 0 }  // paid once, edited for free

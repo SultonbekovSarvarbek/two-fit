@@ -8,7 +8,8 @@ PRICE_MIN = 10_000
 PRICE_MAX = 100_000_000
 PAYMENTS_LEFT_MAX = 60  # monthly installment payments still to make
 # 1Fit's standard tariffs in Tashkent, in days: 6, 12 and 24 months. The seller picks one instead of typing a name.
-TARIFF_PLANS = (180, 365, 730)
+# Only a 12- or 24-month membership can be re-registered to another person in 1Fit: 6 months cannot be sold.
+TARIFF_PLANS = (365, 730)
 PLAN_FREEZE_DAYS = 90  # freezes push the end date past the tariff length; more than this is a mistake
 DESC_MAX = 500
 TARIFF_MIN, TARIFF_MAX = 2, 60
