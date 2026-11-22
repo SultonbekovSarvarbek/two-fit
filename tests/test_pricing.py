@@ -303,13 +303,13 @@ async def test_bot_card_has_no_low_price_warning(h):
 
 
 # ------------------------------------------------------------------ AUTO_PRICE: the price is the recommended one
-def test_auto_price_is_on_by_default(monkeypatch):
+def test_seller_types_the_price_by_default(monkeypatch):
     from two_fit.config import load_config
     monkeypatch.delenv("AUTO_PRICE", raising=False)
     monkeypatch.setattr("two_fit.config.load_dotenv", lambda *a, **k: None)
-    assert load_config().auto_price is True
-    monkeypatch.setenv("AUTO_PRICE", "0")
     assert load_config().auto_price is False
+    monkeypatch.setenv("AUTO_PRICE", "1")
+    assert load_config().auto_price is True
 
 
 async def test_auto_price_in_the_mini_app(tmp_path):
