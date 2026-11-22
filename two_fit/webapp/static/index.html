@@ -587,8 +587,8 @@ function publicRows(l) {
     h("div", null, h("span", { class: "k" }, T(isPromo(l) ? "app.f.date_promo" : "app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))),
     l.freeze_days ? h("div", null, h("span", { class: "k" }, "❄️ " + T("app.f.freeze_short")),
       h("span", { class: "v num" }, T("app.freeze_row", { days: l.freeze_days }))) : null,
-    l.paid_in_full == null ? null : h("div", null, h("span", { class: "k" }, T("app.f.pay_short")),
-      h("span", { class: "v num" }, installment(l) ? T("app.pay.installment_row", installmentVars(l)) : T("app.pay.full_row"))));
+    // No «Оплата» row: the installments are already in the price card, split into what goes where.
+  );
 }
 function priceHero(l) {
   return h("div", { class: "card hero" },
