@@ -9,7 +9,7 @@ from two_fit.validators import (
     ValidationError, contains_contacts, normalize_phone, parse_description, parse_end_date, parse_monthly,
     parse_payments_left, parse_price, parse_start_date,
 )
-from two_fit.usage import usage
+from two_fit.usage import remaining, usage
 
 FUTURE = (today_local() + timedelta(days=200)).isoformat()
 
@@ -97,6 +97,13 @@ def test_usage():
     # used never exceeds the total, even past the end date
     u = usage("2025-01-01", "2026-01-01", today)
     assert u["used"] == u["total"] == 12 and u["pct"] == 100
+
+
+def test_usage_left_matches_remaining():
+    # listing #21: «Осталось 10 мес.» on top and «использовано 3 из 12 · осталось 9 мес.» below
+    today = date(2026, 11, 22)
+    u = usage("2026-09-01", "2027-09-11", today)
+    assert u["total"] - u["used"] == remaining("2027-09-11", today)["n"] == 10
 
 
 async def test_start_date_stored_and_checked(repo):

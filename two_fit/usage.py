@@ -38,7 +38,9 @@ def usage(start_iso: str | None, end_iso: str, today: date, plan_days: int | Non
     if total_days >= MONTHS_FROM_DAYS:
         unit = "m"
         total = max(1, round(total_days / DAYS_PER_MONTH))
-        used = min(total, round(used_days / DAYS_PER_MONTH))
+        # «left» is rounded the way ``remaining`` rounds it, so «Осталось 10 мес.» above never meets «осталось 9»
+        left = round(max((end - max(today, start)).days, 0) / DAYS_PER_MONTH)
+        used = min(total, max(0, total - left))
     else:
         unit, total, used = "d", total_days, used_days
     return {"used": used, "total": total, "unit": unit, "pct": round(used_days * 100 / total_days)}

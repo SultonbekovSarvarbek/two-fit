@@ -375,3 +375,18 @@ async def test_preview_says_what_the_seller_gives(h):
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
     assert "📦 Вы отдаёте покупателю <b>7 мес.</b> — до" in preview and "Всё верно?" in preview
+
+
+def test_stored_installment_is_not_a_suspicious_price():
+    # listing #21: 10 000 now + 9 × 533 333 to 1Fit was flagged «possibly the monthly price», because the
+    # stored listing says paid_in_full=0 and only False counted as an installment
+    from types import SimpleNamespace
+
+    from two_fit.bot.ui import price_advice
+    ctx = SimpleNamespace(repo=SimpleNamespace(fit_prices=None))
+    end = (today_local() + timedelta(days=293)).isoformat()
+    stored = {"kind": "membership", "end_date": end, "tariff_days": 365, "price": 10_000,
+              "paid_in_full": 0, "monthly_payment": 533_333, "payments_left": 9}
+    a = price_advice(ctx, stored)
+    assert a.installments == 4_799_997 and not a.suspicious(10_000)
+    assert price_advice(ctx, {**stored, "paid_in_full": 1}).installments == 0

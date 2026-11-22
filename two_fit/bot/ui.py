@@ -171,7 +171,8 @@ def price_advice(ctx: Ctx, data: dict[str, Any]) -> Advice | None:
     """Price advice for a membership listing or draft; None for a promo code or without an end date."""
     if data.get("kind") == "promo" or not data.get("end_date"):
         return None
-    installment = data.get("paid_in_full") is False
+    # a stored listing has 0, a draft has False: both mean the buyer takes the installments over
+    installment = data.get("paid_in_full") is not None and not data["paid_in_full"]
     return advise(data["end_date"], today_local(), ctx.repo.fit_prices,
                   data.get("monthly_payment") if installment else None,
                   data.get("payments_left") if installment else None, plan_days=data.get("tariff_days"))
