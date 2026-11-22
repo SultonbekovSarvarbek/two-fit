@@ -35,7 +35,7 @@ async def render_list(ctx: Ctx, page: int) -> tuple[str, InlineKeyboardMarkup | 
 def card(ctx: Ctx, listing: dict, page: int) -> tuple[str, InlineKeyboardMarkup]:
     parts = [
         ctx.t("my.status_line", status=status_label(ctx, listing)),
-        listing_public(ctx, listing, listing["id"]),
+        listing_public(ctx, listing, listing["id"], installments=True),
         commission_block(ctx, listing["price"], percent=ctx.repo.listing_percent(listing)),
     ]
     if listing["promo_code"]:

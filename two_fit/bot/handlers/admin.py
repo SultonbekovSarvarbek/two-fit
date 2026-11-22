@@ -113,7 +113,7 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
     text = ctx.t(
         "admin.card",
         status=status_label(ctx, listing),
-        public=listing_public(ctx, listing, listing["id"]),
+        public=listing_public(ctx, listing, listing["id"], installments=True),
         name=esc(listing["seller_name"]),
         phone=esc(listing["seller_phone"] or "—"),  # Mini App sellers are reached through Telegram
         tg=tg_ref(seller, listing["seller_id"]),

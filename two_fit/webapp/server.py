@@ -97,6 +97,13 @@ def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> di
             "saved": round_k(a.saved(price))}
 
 
+def price_total(listing: dict[str, Any]) -> int:
+    """«580 000» with 9 × 533 333 still due to 1Fit: 5 380 000 (rounded to a thousand when there are installments)."""
+    if listing["paid_in_full"] == 0 and listing["monthly_payment"] and listing["payments_left"]:
+        return round_k(listing["price"] + listing["monthly_payment"] * listing["payments_left"])
+    return listing["price"]
+
+
 def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = None) -> dict[str, Any]:
     """Only what a buyer may see — never the seller's identity, contacts or screenshot."""
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
@@ -106,10 +113,8 @@ def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = Non
     view["freeze_days"] = listing["freeze_days"]  # unused freeze days the buyer gets; 0 none, None not asked
     view["usage"] = usage(listing["start_date"], listing["end_date"], today_local(), listing["tariff_days"])
     view["left"] = remaining(listing["end_date"], today_local())
-    paid = listing["paid_in_full"]
-    view["paid_in_full"] = None if paid is None else bool(paid)  # None: listed before the question existed
-    view["monthly_payment"] = listing["monthly_payment"] if paid == 0 else None
-    view["payments_left"] = listing["payments_left"] if paid == 0 else None
+    # Buyers never see the installments, only the whole sum they pay: the price plus the payments still due to 1Fit
+    view["price_total"] = price_total(listing)
     view["month_cost"] = month_cost(listing, fit_prices)
     return view
 
@@ -120,6 +125,10 @@ def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
     c = ctx.commission(listing["price"], percent=ctx.repo.listing_percent(listing))
     return {
         **public_view(listing, ctx.repo.fit_prices),
+        # the seller's own answers, to edit them: never in the public view
+        "paid_in_full": None if listing["paid_in_full"] is None else bool(listing["paid_in_full"]),
+        "monthly_payment": listing["monthly_payment"] if listing["paid_in_full"] == 0 else None,
+        "payments_left": listing["payments_left"] if listing["paid_in_full"] == 0 else None,
         "promo_code": listing["promo_code"],
         "percent": c.percent,  # the rate this listing was accepted at
         "rate_changed": c.percent != ctx.percent(listing["kind"]),  # editing means accepting today's rate

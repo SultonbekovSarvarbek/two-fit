@@ -40,7 +40,6 @@ async def render_catalog(ctx: Ctx, page: int, city: str) -> tuple[str, InlineKey
     item_rows = [
         [btn(
             ctx.t("catalog.item", id=r["id"], city=ctx.i18n.city(ctx.lang, r["city"]), price=fmt_money(buyer_total(r)))
-            + (ctx.t("catalog.installment") if r["paid_in_full"] == 0 else "")
             + (ctx.t("catalog.promo") if r["kind"] == "promo" else "")
             + saving_mark(ctx, r),
             CardCb(id=r["id"], page=page, city=city),

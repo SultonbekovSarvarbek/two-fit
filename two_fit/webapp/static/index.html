@@ -471,7 +471,7 @@ function listingRow(l, onclick, extra) {
     h("div", { class: "main" },
       h("div", { class: "title" }, isPromo(l) ? l.tariff : leftText(l, "app.left_title")),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
-      usageBar(l), extra || [promoBadge(l), priceBadge(l), " ", payBadge(l)], monthCost(l)),
+      usageBar(l), extra || promoBadge(l), monthCost(l)),  // negotiable and installments: on the listing itself
     h("div", { class: "price num" }, money(buyerTotal(l)), h("small", null, T("app.sum"))));
 }
 function cheapestFlag() {
@@ -492,10 +492,9 @@ function usageBar(l, big) {
 }
 const priceBadge = (l) => h("span", { class: "badge ptype " + (l.price_negotiable ? "deal" : "fixed") },
   T(l.price_negotiable ? "app.badge.negotiable" : "app.badge.fixed"));
-const installment = (l) => l.paid_in_full === false && l.monthly_payment && l.payments_left;
-const installmentVars = (l) => ({ price: money(l.price), monthly: money(l.monthly_payment), left: l.payments_left, total: money(l.monthly_payment * l.payments_left) });
 // What the buyer pays in all: the price plus the installments still due to 1Fit. Shown as the price.
-const buyerTotal = (l) => l.price + (installment(l) ? l.monthly_payment * l.payments_left : 0);
+// What the buyer pays in all (the server adds the installments still due to 1Fit; buyers never see them apart).
+const buyerTotal = (l) => l.price_total || l.price;
 const isPromo = (l) => l.kind === "promo";
 // Months left instead of a tariff name: «12 months» made buyers think they got all 12.
 // «52 дн.» / «7 мес.» from today to an end date — the same rule as the server's remaining().
@@ -519,7 +518,6 @@ function confirmSheet(title, rows, okText, backText) {
 }
 const leftText = (l, key) => T(key || "app.left", { n: l.left.n, unit: T("app.unit." + l.left.unit) });
 const promoBadge = (l) => isPromo(l) ? [h("span", { class: "badge ptype inst" }, "🎁 " + T("app.badge.promo")), " "] : null;
-const payBadge = (l) => installment(l) ? h("span", { class: "badge ptype inst" }, T("app.pay.installment_row", installmentVars(l))) : null;
 // «5 380 000 сум за 10 мес. вместо 6 330 000»: the whole sum for the days left, installments included, next to 1Fit.
 // A price far too low for the whole term («485 000 for 9 months») is flagged, never shown as a −92% bargain.
 const suspicious = (l) => !!(l.month_cost && l.month_cost.suspicious);
@@ -594,8 +592,7 @@ function priceHero(l) {
   return h("div", { class: "card hero" },
     h("div", { class: "label" }, T("app.f.price")),
     h("div", { class: "value num" }, money(buyerTotal(l)) + " ", h("small", null, T("app.sum"))),
-    saveFlag(l), promoBadge(l), priceBadge(l), monthCost(l, true),
-    installment(l) ? h("div", { class: "inst-note num" }, "💳 " + T("app.pay.installment_note", installmentVars(l))) : null);
+    saveFlag(l), promoBadge(l), priceBadge(l), monthCost(l, true));
 }
 
 function listingView(view, rev) {

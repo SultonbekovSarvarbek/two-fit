@@ -148,9 +148,10 @@ def left_text(ctx: Ctx, end_iso: str) -> str:
     return f"{r['n']} {unit}"
 
 
-def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—") -> str:
+def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—", installments: bool = False) -> str:
     """Public part of a listing: only what a buyer may see. Labels in the viewer's language,
-    the seller's own words (tariff, description) as written."""
+    the seller's own words (tariff, description) as written. Buyers never see the installments — only the
+    whole sum; ``installments`` adds them for the seller's own card and the admin."""
     promo = data.get("kind") == "promo"
     text = ctx.t(
         "card.body_promo" if promo else "card.body",
@@ -165,7 +166,8 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
     if data.get("price_negotiable"):
         text += ctx.t("card.negotiable")
     text += month_line(ctx, data)
-    text += payment_line(ctx, data)
+    if installments:
+        text += payment_line(ctx, data)
     if data.get("freeze_days"):
         text += ctx.t("card.freeze", days=data["freeze_days"])
     if data.get("description"):
@@ -227,7 +229,7 @@ def buyer_total(data: dict[str, Any]) -> int:
     price = data.get("price") or 0
     if data.get("paid_in_full") is not None and not data["paid_in_full"] and data.get("monthly_payment") \
             and data.get("payments_left"):
-        return price + data["monthly_payment"] * data["payments_left"]
+        return round_k(price + data["monthly_payment"] * data["payments_left"])  # 5 379 997 -> 5 380 000
     return price
 
 

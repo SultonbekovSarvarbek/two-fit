@@ -200,7 +200,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     assert {c["code"]: c["count"] for c in cat["cities"]} == {"tashkent": 1, "samarkand": 1}
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
-                             "description", "paid_in_full", "monthly_payment", "payments_left", "kind", "left",
+                             "description", "price_total", "kind", "left",
                              "month_cost", "tariff_days", "freeze_days"}
         # No start date, but the 12-month tariff gives it: «used 5 of 12 months» still shows.
         assert item["start_date"] is None and item["tariff_days"] == 365 and item["usage"]["total"] == 12
@@ -351,12 +351,16 @@ async def test_installment_is_asked_and_shown(h, api):
 
     full = await publish(h, api)
     inst = await publish(h, api, paid_in_full=False, monthly_payment=500_000, payments_left="9")
+    # a buyer sees only the whole sum: 2 000 000 now + 9 × 500 000 to 1Fit, never the installments themselves
     _, card = await api.call("GET", f"/api/listings/{inst}", BUYER)
     l = card["listing"]
-    assert (l["paid_in_full"], l["monthly_payment"], l["payments_left"]) == (False, 500_000, 9)
+    assert l["price_total"] == 6_500_000 and not {"paid_in_full", "monthly_payment", "payments_left"} & set(l)
     _, card = await api.call("GET", f"/api/listings/{full}", BUYER)
-    l = card["listing"]
-    assert (l["paid_in_full"], l["monthly_payment"], l["payments_left"]) == (True, None, None)
+    assert card["listing"]["price_total"] == card["listing"]["price"]
+    # the seller still sees and edits their own answers
+    _, mine = await api.call("GET", f"/api/listings/{inst}", SELLER)
+    l = mine["listing"]
+    assert (l["paid_in_full"], l["monthly_payment"], l["payments_left"]) == (False, 500_000, 9)
 
     # Switching to «fully paid» drops the installment numbers.
     status, _ = await api.call("PUT", f"/api/listings/{inst}", SELLER,
