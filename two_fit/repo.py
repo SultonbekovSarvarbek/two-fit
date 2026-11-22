@@ -625,6 +625,17 @@ class Repo:
             rows = await self._all("SELECT * FROM listings ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         return rows, total
 
+    async def live_listings_by_seller(self, today: date | None = None) -> dict[int, list[int]]:
+        """Seller id -> ids of their memberships that buyers see or will see soon (published or in moderation)."""
+        rows = await self._all(
+            "SELECT id, seller_id FROM listings WHERE status IN (?,?) AND kind=? AND end_date>=? ORDER BY seller_id, id",
+            (LS.APPROVED, LS.PENDING, LK.MEMBERSHIP, (today or today_local()).isoformat()),
+        )
+        out: dict[int, list[int]] = {}
+        for r in rows:
+            out.setdefault(r["seller_id"], []).append(r["id"])
+        return out
+
     async def count_status(self, status: str) -> int:
         return await self._scalar("SELECT COUNT(*) FROM listings WHERE status=?", (status,))
 

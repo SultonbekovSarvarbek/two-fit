@@ -193,6 +193,11 @@ async def on_admin(call: CallbackQuery, callback_data: AdmCb, state: FSMContext,
         elif a == "lst":
             await call.answer()
             await _show(call, *await render_list(ctx, extra or "all", max(0, page)))
+        elif a == "askp!":
+            await call.answer(ctx.t("admin.askprice.sending"))
+            await call.message.edit_reply_markup(reply_markup=None)
+            sent, failed = await send_askprice(ctx, notifier)
+            await call.message.answer(ctx.t("admin.askprice.done", sent=sent, failed=failed))
         elif a == "stats":
             await call.answer()
             await _show(call, *await render_stats(ctx))
@@ -285,6 +290,40 @@ async def on_find(message: Message, state: FSMContext, ctx: Ctx) -> None:
         return
     await state.clear()
     await _send(message, await render_card(ctx, listing))
+
+
+# ------------------------------------------------------------------ «update your price» to every seller
+ASK_PRICE_PAUSE = 0.05  # Telegram allows about 30 messages a second
+
+
+@router.message(Command("askprice"))
+async def cmd_askprice(message: Message, ctx: Ctx) -> None:
+    """Shows how many sellers get the message; nothing is sent before «Send»."""
+    sellers = await ctx.repo.live_listings_by_seller()
+    if not sellers:
+        await message.answer(ctx.t("admin.askprice.none"))
+        return
+    n_listings = sum(len(ids) for ids in sellers.values())
+    await message.answer(
+        ctx.t("admin.askprice.confirm", sellers=len(sellers), listings=n_listings)
+        + "\n\n" + ctx.t("notify.update_price", ids="№1"),
+        reply_markup=confirm_kb(ctx, A("askp!"), A("home")))
+
+
+async def send_askprice(ctx: Ctx, notifier: Notifier) -> tuple[int, int]:
+    """Each seller once, in their language, with a button to each of their listings. Returns (sent, failed)."""
+    import asyncio
+
+    from ..callbacks import MyCb
+    sent = failed = 0
+    for seller_id, ids in (await ctx.repo.live_listings_by_seller()).items():
+        ok = await notifier.user(ctx, seller_id, lambda u: (
+            u.t("notify.update_price", ids=", ".join(f"№{i}" for i in ids)),
+            kb(*[[btn(u.t("notify.update_price_btn", id=i), MyCb(action="open", id=i))] for i in ids]),
+        ))
+        sent, failed = sent + ok, failed + (not ok)
+        await asyncio.sleep(ASK_PRICE_PAUSE)
+    return sent, failed
 
 
 @router.message(Command("l"))

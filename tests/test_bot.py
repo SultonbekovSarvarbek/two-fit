@@ -422,3 +422,26 @@ def test_stored_installment_is_not_a_suspicious_price():
 def _key(h):
     from aiogram.fsm.storage.base import StorageKey
     return StorageKey(bot_id=h.bot.id, chat_id=SELLER, user_id=SELLER)
+
+
+async def test_admin_asks_every_seller_to_update_the_price(h):
+    await choose_lang(h, SELLER, "uz")
+    await choose_lang(h, ADMIN, "ru")
+    await create_listing(h)                       # №1, in moderation
+    await create_listing(h)                       # №2, published
+    await h.repo.approve(2, ADMIN)
+    await h.repo.touch_user(STRANGER, "user3", "Name3")
+    from .test_core import draft as repo_draft
+    gone = await h.repo.create_listing(STRANGER, "ru", repo_draft())
+    await h.repo.withdraw_by_seller(gone, STRANGER)  # withdrawn: not asked
+
+    assert "Админка" not in texts(await h.send(STRANGER, "/askprice"))  # admins only
+    ask = texts(await h.send(ADMIN, "/askprice"))
+    assert "1 продавцам (2 объявлений" in ask
+    before = len(h.to(SELLER))
+    done = await h.click(ADMIN, "ad:askp!:0:0:")
+    assert "Отправлено: 1. Не доставлено: 0" in texts(done)
+    got = h.to(SELLER)[before:]
+    assert len(got) == 1 and "Абонементингиз нархини янгиланг" in texts(got) and "№1, №2" in texts(got)
+    assert [b.callback_data for c in got for b in buttons_of(c)] == ["my:open:1:0", "my:open:2:0"]
+    assert not h.to(STRANGER)[-1:] or "нархини" not in texts(h.to(STRANGER)[-1:])
