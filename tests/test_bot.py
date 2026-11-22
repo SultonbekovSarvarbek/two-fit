@@ -442,6 +442,6 @@ async def test_admin_asks_every_seller_to_update_the_price(h):
     done = await h.click(ADMIN, "ad:askp!:0:0:")
     assert "Отправлено: 1. Не доставлено: 0" in texts(done)
     got = h.to(SELLER)[before:]
-    assert len(got) == 1 and "Абонементингиз нархини янгиланг" in texts(got) and "№1, №2" in texts(got)
+    assert len(got) == 1 and "Бу 2FIT оператори" in texts(got) and "2FIT жамоаси" in texts(got)
     assert [b.callback_data for c in got for b in buttons_of(c)] == ["my:open:1:0", "my:open:2:0"]
     assert not h.to(STRANGER)[-1:] or "нархини" not in texts(h.to(STRANGER)[-1:])

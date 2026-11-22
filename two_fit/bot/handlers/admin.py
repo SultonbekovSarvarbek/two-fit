@@ -306,7 +306,7 @@ async def cmd_askprice(message: Message, ctx: Ctx) -> None:
     n_listings = sum(len(ids) for ids in sellers.values())
     await message.answer(
         ctx.t("admin.askprice.confirm", sellers=len(sellers), listings=n_listings)
-        + "\n\n" + ctx.t("notify.update_price", ids="№1"),
+        + "\n\n" + ctx.t("notify.update_price"),
         reply_markup=confirm_kb(ctx, A("askp!"), A("home")))
 
 
@@ -318,7 +318,7 @@ async def send_askprice(ctx: Ctx, notifier: Notifier) -> tuple[int, int]:
     sent = failed = 0
     for seller_id, ids in (await ctx.repo.live_listings_by_seller()).items():
         ok = await notifier.user(ctx, seller_id, lambda u: (
-            u.t("notify.update_price", ids=", ".join(f"№{i}" for i in ids)),
+            u.t("notify.update_price"),
             kb(*[[btn(u.t("notify.update_price_btn", id=i), MyCb(action="open", id=i))] for i in ids]),
         ))
         sent, failed = sent + ok, failed + (not ok)
