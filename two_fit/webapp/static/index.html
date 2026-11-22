@@ -155,14 +155,6 @@ p { margin: 0; }
 .hero .value { font: 700 28px/1.15 var(--display); letter-spacing: -0.03em; margin-top: 4px; }
 .hero .value small { font: 500 15px var(--body); letter-spacing: 0; opacity: 0.66; }
 /* used share of the membership: «Использовано 8 из 12 мес.» + a bar */
-.usage { margin-top: 8px; }
-.usage .cap { font-size: 12.5px; color: var(--hint); margin-bottom: 5px; }
-.usage .track { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
-.usage .fill { height: 100%; border-radius: inherit; background: var(--mark); }
-.card.usage { margin-top: 0; padding: 15px 16px 17px; }
-.card.usage .cap { font-size: 14.5px; color: var(--text); margin-bottom: 9px; }
-.card.usage .cap b { font-weight: 600; }
-.card.usage .track { height: 8px; }
 .rows > div { display: flex; justify-content: space-between; gap: 16px; padding: 13px 16px; }
 .rows > div + div { border-top: 1px solid var(--line); }
 .rows .k { color: var(--hint); flex: none; }
@@ -484,24 +476,13 @@ function listingRow(l, onclick, extra) {
     h("div", { class: "main" },
       h("div", { class: "title" }, isPromo(l) ? l.tariff : leftText(l, "app.left_title")),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
-      usageBar(l), extra || promoBadge(l)),  // negotiable and installments: on the listing itself
+      extra || promoBadge(l)),  // negotiable and installments: on the listing itself
     h("div", { class: "price num" }, money(buyerTotal(l)), h("small", null, T("app.sum"))));
 }
 function cheapestFlag() {
   const flag = h("span", { class: "flag" }, T("app.badge.cheapest"));
   flag.insertAdjacentHTML("afterbegin", '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>');
   return flag;
-}
-function usageBar(l, big) {
-  const u = l.usage;
-  if (!u) return null;
-  const unit = T("app.unit." + u.unit);
-  const used = T("app.usage", { used: u.used, total: u.total, unit });
-  const left = T("app.usage_left", { left: u.total - u.used, unit });
-  return h("div", { class: big ? "card usage" : "usage" },
-    h("div", { class: "cap num" }, big ? h("b", null, used) : used, " · " + left),
-    h("div", { class: "track", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(u.pct), "aria-label": used },
-      h("div", { class: "fill", style: "width:" + Math.max(u.pct, 2) + "%" })));
 }
 const priceBadge = (l) => h("span", { class: "badge ptype " + (l.price_negotiable ? "deal" : "fixed") },
   T(l.price_negotiable ? "app.badge.negotiable" : "app.badge.fixed"));
@@ -609,7 +590,7 @@ function listingView(view, rev) {
   return [
     h("h1", null, T("app.listing", { id: l.id })),
     h("div", { class: "stack" },
-      priceHero(l), usageBar(l, true), publicRows(l),
+      priceHero(l), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
       h("h2", null, T("app.seller.title")),
       sellerCard(l.seller),
@@ -1059,7 +1040,7 @@ function mineView(view) {
         l.reject_reason ? h("div", { style: "margin-top:4px" }, T("app.my.reason", { reason: l.reject_reason })) : null,
         l.fee_due ? h("div", { style: "margin-top:4px" }, "💳 " + T("app.my.unpaid", { fee: money(l.fee) })) : null),
       l.can_pay ? pay : null,
-      usageBar(l, true), publicRows(l),
+      publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
       h("div", { class: "card rows" },
         h("div", { class: "strong" }, h("span", { class: "k" }, T("app.f.price")), h("span", { class: "v num" }, money(l.price) + " " + sumLabel(l)))),

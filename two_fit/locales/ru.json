@@ -46,9 +46,8 @@
   "status.sold": "✅ Продано",
   "status.expired": "⌛ Срок абонемента истёк",
 
-  "card.body": "<b>Объявление №{id}</b>\n\n🏙 Город: {city}\n⏳ Осталось: <b>{left}</b>\n📅 Действует до {date}{usage}\n💰 Цена: <b>{price} сум</b>",
-  "card.body_promo": "<b>Объявление №{id}</b> · 🎁 промокод 1Fit\n\n🏙 Город: {city}\n🎁 Что даёт: {tariff}\n📅 Активировать до {date}{usage}\n💰 Цена: <b>{price} сум</b>",
-  "card.usage": "\n📊 {usage} · {left}\n{bar}",
+  "card.body": "<b>Объявление №{id}</b>\n\n🏙 Город: {city}\n⏳ Осталось: <b>{left}</b>\n📅 Действует до {date}\n💰 Цена: <b>{price} сум</b>",
+  "card.body_promo": "<b>Объявление №{id}</b> · 🎁 промокод 1Fit\n\n🏙 Город: {city}\n🎁 Что даёт: {tariff}\n📅 Активировать до {date}\n💰 Цена: <b>{price} сум</b>",
   "card.desc": "\n\n📝 {desc}",
   "card.negotiable": " · <i>договорная</i>",
   "card.paid_full": "\n✅ Оплачен полностью — покупателю больше ничего не нужно доплачивать",

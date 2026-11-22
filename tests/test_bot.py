@@ -48,7 +48,7 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     assert "Сотувчи: <b>Алишер</b>" in pt and "+998901112233" in pt and "@user1" in pt
     assert "барча харидорлар кўради" in pt
     assert "келишилади" not in pt
-    assert "📊 Ишлатилди: 5 / 12 ой · қолди: 7 ой\n▰▰▰▰▱▱▱▱▱▱" in pt
+    assert "Ишлатилди" not in pt and "▰" not in pt  # no «used … of 12 months» bar
     end = today_local() + timedelta(days=200)
     month = "январь феврал март апрел май июн июл август сентябр октябр ноябр декабр".split()[end.month - 1]
     assert f"Амал қилиш муддати: {end.day} {month} {end.year} гача" in pt  # words, not 07.05.2027

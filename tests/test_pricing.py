@@ -299,7 +299,7 @@ async def test_bot_card_has_no_low_price_warning(h):
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
     assert "Очень низкая цена" not in preview and "сэкономьте" not in preview  # buyers get no such warning
-    assert "Использовано" in preview  # the 12-month tariff gives «used … of 12 months» without a start date
+    assert "Использовано" not in preview  # no «used … of 12 months» bar on the card
 
 
 # ------------------------------------------------------------------ AUTO_PRICE: the price is the recommended one

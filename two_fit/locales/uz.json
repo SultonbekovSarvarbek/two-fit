@@ -46,9 +46,8 @@
   "status.sold": "✅ Сотилган",
   "status.expired": "⌛ Абонемент муддати тугаган",
 
-  "card.body": "<b>Эълон №{id}</b>\n\n🏙 Шаҳар: {city}\n⏳ Қолди: <b>{left}</b>\n📅 Амал қилиш муддати: {date} гача{usage}\n💰 Нарх: <b>{price} сўм</b>",
-  "card.body_promo": "<b>Эълон №{id}</b> · 🎁 1Fit промокоди\n\n🏙 Шаҳар: {city}\n🎁 Нима беради: {tariff}\n📅 Фаоллаштириш муддати: {date} гача{usage}\n💰 Нарх: <b>{price} сўм</b>",
-  "card.usage": "\n📊 {usage} · {left}\n{bar}",
+  "card.body": "<b>Эълон №{id}</b>\n\n🏙 Шаҳар: {city}\n⏳ Қолди: <b>{left}</b>\n📅 Амал қилиш муддати: {date} гача\n💰 Нарх: <b>{price} сўм</b>",
+  "card.body_promo": "<b>Эълон №{id}</b> · 🎁 1Fit промокоди\n\n🏙 Шаҳар: {city}\n🎁 Нима беради: {tariff}\n📅 Фаоллаштириш муддати: {date} гача\n💰 Нарх: <b>{price} сўм</b>",
   "card.desc": "\n\n📝 {desc}",
   "card.negotiable": " · <i>келишилади</i>",
   "card.paid_full": "\n✅ Тўлиқ тўланган — харидор бошқа ҳеч нарса тўламайди",

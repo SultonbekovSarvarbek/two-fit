@@ -18,7 +18,7 @@ from ..i18n import LANGS
 from ..money import fmt_money, round_k
 from ..pricing import Advice, advise
 from ..repo import LS, TZ, Repo, today_local
-from ..usage import remaining, span, usage
+from ..usage import remaining, span
 from .callbacks import NOOP, LangCb
 from .context import Ctx
 
@@ -118,24 +118,6 @@ def status_label(ctx: Ctx, listing: dict[str, Any]) -> str:
     return ctx.t(f"status.{listing['status']}")
 
 
-USAGE_BAR_CELLS = 10
-
-
-def usage_line(ctx: Ctx, data: dict[str, Any]) -> str:
-    """«📊 Использовано 8 из 12 мес. · осталось 4 мес.» and a text progress bar; empty without a start date."""
-    u = usage(data.get("start_date"), data["end_date"], today_local(), data.get("tariff_days"))
-    if not u:
-        return ""
-    unit = ctx.t(f"app.unit.{u['unit']}")
-    filled = min(USAGE_BAR_CELLS, round(u["pct"] * USAGE_BAR_CELLS / 100))
-    return ctx.t(
-        "card.usage",
-        usage=ctx.t("app.usage", used=u["used"], total=u["total"], unit=unit),
-        left=ctx.t("app.usage_left", left=u["total"] - u["used"], unit=unit),
-        bar="▰" * filled + "▱" * (USAGE_BAR_CELLS - filled),
-    )
-
-
 def span_text(ctx: Ctx, days: int) -> str:
     """«10 мес.» / «45 дн.» for a number of days left."""
     r = span(days)
@@ -160,7 +142,6 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
         tariff=esc(data.get("tariff") or ""),
         left=left_text(ctx, data["end_date"]),
         date=fmt_day(ctx, data["end_date"]),
-        usage="" if promo else usage_line(ctx, data),
         price=fmt_money(buyer_total(data)),  # what the buyer pays in all: the price plus the installments
     )
     if data.get("price_negotiable"):
