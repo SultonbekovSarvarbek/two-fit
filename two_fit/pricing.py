@@ -19,7 +19,7 @@ from .validators import PRICE_MIN
 # These are only the starting values: the price watcher keeps the current ones in the database.
 DEFAULT_FIT_PRICES: dict[int, int] = {90: 4_890_000, 180: 5_890_000, 365: 7_890_000, 730: 12_190_000}
 
-DISCOUNT_PERCENT = 30  # how much cheaper than 1Fit we advise to sell
+DISCOUNT_PERCENT = 20  # how much cheaper than 1Fit we advise to sell
 MAX_PERCENT = 85       # a seller may not ask more than this share of the 1Fit value: it would not sell
 MIN_PERCENT = 40       # below this the seller is warned (a typo or a giveaway)
 SUSPICIOUS_PERCENT = 25  # below this it is almost surely the price of one month, not of the whole term
@@ -80,13 +80,15 @@ def advise(end_iso: str, today: date, fit_prices: dict[int, int] | None = None,
            discount: int = DISCOUNT_PERCENT, max_percent: int = MAX_PERCENT,
            plan_days: int | None = None) -> Advice | None:
     """Advice for a membership that ends on ``end_iso``; ``None`` if it has already ended.
-    ``plan_days``: the 1Fit tariff the seller bought; without it, the cheapest one that covers the days left."""
+    The base is always the cheapest 1Fit tariff that covers the days left — what the buyer would buy instead.
+    ``plan_days`` (the tariff the seller bought) does not change it: 147 days left of a 12-month membership
+    compete with 1Fit's 6 months for 5 890 000, not with a year for 7 890 000. It is kept for the callers."""
     days_left = (date.fromisoformat(end_iso) - today).days
     if days_left <= 0:
         return None
     prices = normalize_prices(fit_prices)
     plans = sorted(prices)
-    base_days = plan_days if plan_days in prices else next((d for d in plans if d >= days_left), plans[-1])
+    base_days = next((d for d in plans if d >= days_left), plans[-1])
     base_price = prices[base_days]
     fit_value = days_left / base_days * base_price
     installments = (monthly_payment or 0) * (payments_left or 0) if monthly_payment and payments_left else 0
