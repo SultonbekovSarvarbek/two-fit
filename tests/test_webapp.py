@@ -483,7 +483,7 @@ async def test_promo_codes_hidden_by_default(tmp_path):
         await h.send(SELLER, "/start")
         await h.click(SELLER, "lang:ru")
         first = texts(await h.send(SELLER, "➕ Продать абонемент"))
-        assert "Шаг 1/10" in first and "Что вы продаёте" not in first and "промокод" not in first
+        assert "Шаг 1/9" in first and "Что вы продаёте" not in first and "промокод" not in first
         assert "промокод" not in texts(await h.send(SELLER, "ℹ️ Как это работает"))
     finally:
         await h.stop()
@@ -544,7 +544,6 @@ async def test_bot_requires_the_screenshot(tmp_path):
         await h.click(SELLER, "sl:city:tashkent")
         await h.click(SELLER, "sl:plan:365")
         await h.send(SELLER, (tl() + td(days=200)).strftime("%d.%m.%Y"))
-        await h.click(SELLER, "sl:skip:")
         await h.click(SELLER, "sl:pay:full")
         await h.click(SELLER, "sl:freeze:no")
         await h.send(SELLER, "2 000 000")

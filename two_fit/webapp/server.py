@@ -93,7 +93,7 @@ def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> di
     if not a or a.saving(listing["price"]) <= 0:
         return None
     price = listing["price"]
-    return {"month": round_k(a.month_cost(price)), "fit_month": round_k(a.fit_month), "saving": a.saving(price),
+    return {"total": round_k(a.total(price)), "fit_total": round_k(a.fit_value), "saving": a.saving(price),
             "saved": round_k(a.saved(price))}
 
 
@@ -490,7 +490,7 @@ class WebApp:
             return web.json_response({"advice": None})
         return web.json_response({"advice": {
             "recommended": a.recommended, "max": a.max_price, "min": a.min_price, "installments": a.installments,
-            "month": round_k(a.month_cost(a.recommended)), "fit_month": round_k(a.fit_month),
+            "total": round_k(a.total(a.recommended)), "fit_total": round_k(a.fit_value),
             "saving": a.saving(a.recommended),
             "days_left": a.days_left, "base_days": a.base_days,
         }})

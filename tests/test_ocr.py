@@ -123,7 +123,6 @@ async def test_bot_offers_the_values_read_off_the_screenshots(h, monkeypatch):
     await h.click(SELLER, "sl:city:tashkent")
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, end.strftime("%d.%m.%Y"))
-    await h.click(SELLER, "sl:skip:")
     await h.click(SELLER, "sl:pay:full")
     await h.click(SELLER, "sl:freeze:no")
     await h.send(SELLER, "2 000 000")

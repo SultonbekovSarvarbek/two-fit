@@ -88,7 +88,6 @@ async def walk_to_price(h, days=200):
     await h.click(SELLER, "sl:city:tashkent")
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, (today_local() + timedelta(days=days)).strftime("%d.%m.%Y"))
-    await h.click(SELLER, "sl:skip:")
     await h.click(SELLER, "sl:pay:full")
     return await h.click(SELLER, "sl:freeze:no")
 
@@ -96,7 +95,7 @@ async def walk_to_price(h, days=200):
 async def test_bot_shows_and_applies_the_recommended_price(h):
     a = advise((today_local() + timedelta(days=200)).isoformat(), today_local())
     ask = texts(await walk_to_price(h))
-    assert "Рекомендуемая цена" in ask and "сум в месяц" in ask and "1Fit" in ask
+    assert "Рекомендуемая цена" in ask and "Покупатель заплатит за" in ask and "1Fit" in ask
     cb = h.button(SELLER, "Поставить")
     assert cb == f"sl:advice:{a.recommended}"
     calc = texts(await h.click(SELLER, cb))
@@ -117,7 +116,7 @@ async def test_bot_refuses_a_price_dearer_than_1fit(h):
     assert "намного дешевле" in ok
 
 
-async def test_card_shows_the_cost_per_month(h):
+async def test_card_shows_the_total_for_the_months_left(h):
     await walk_to_price(h)
     await h.send(SELLER, "2 000 000")
     await h.click(SELLER, "sl:skip:")
@@ -125,8 +124,8 @@ async def test_card_shows_the_cost_per_month(h):
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
     # In words: «it comes to … a month — 1Fit charges … a month; … cheaper, you save ≈ …», round sums
-    assert "Выходит <b>" in preview and "сум в месяц</b> — в 1Fit" in preview and "Купите сразу и сэкономьте ≈" in preview
-    assert "000 сум в месяц</b>" in preview
+    assert "Всего за " in preview and "000 сум</b> — в 1Fit" in preview and "Купите сразу и сэкономьте ≈" in preview
+    assert "в месяц" not in preview  # the whole sum for the months left, not a per-month figure
 
 
 def _key(h):
@@ -153,7 +152,7 @@ async def test_api_advice_and_limit(h, api):  # noqa: F811
     await h.repo.approve(made["id"], ADMIN)
     _, cat = await api.call("GET", "/api/catalog", 2)
     cost = cat["items"][0]["month_cost"]
-    assert cost["saving"] > 0 and cost["month"] < cost["fit_month"]
+    assert cost["saving"] > 0 and cost["total"] < cost["fit_total"]
 
 
 # ------------------------------------------------------------------ the price watcher
@@ -351,10 +350,9 @@ async def test_auto_price_in_the_bot(tmp_path):
         await h.click(SELLER, "sl:city:tashkent")
         await h.click(SELLER, "sl:plan:365")
         await h.send(SELLER, end.strftime("%d.%m.%Y"))
-        await h.click(SELLER, "sl:skip:")
         await h.click(SELLER, "sl:pay:full")
         nxt = texts(await h.click(SELLER, "sl:freeze:no"))
-        assert "Шаг 7/9" in nxt and "описание" in nxt  # no price question: straight to the description
+        assert "Шаг 6/8" in nxt and "описание" in nxt  # no price question: straight to the description
         await h.click(SELLER, "sl:skip:")
         await h.click(SELLER, "sl:skip:")
         await h.send(SELLER, "Алишер")
@@ -381,8 +379,8 @@ async def test_catalog_explains_the_saving(h, api):  # noqa: F811
     await h.repo.approve(lid, ADMIN)
     _, cat = await api.call("GET", "/api/catalog", SELLER)
     m = cat["items"][0]["month_cost"]
-    assert set(m) == {"month", "fit_month", "saving", "saved"}
-    assert m["month"] % 1000 == 0 and m["fit_month"] % 1000 == 0 and m["saved"] > 0
+    assert set(m) == {"total", "fit_total", "saving", "saved"}
+    assert m["total"] % 1000 == 0 and m["fit_total"] % 1000 == 0 and m["saved"] > 0
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
     assert {"app.badge.saving", "app.mc.row_text", "app.mc.hero_title", "app.mc.hero_text"} <= set(boot["texts"])
 
@@ -425,18 +423,16 @@ async def test_api_refuses_dates_that_do_not_fit_the_tariff(h, api):  # noqa: F8
     assert status == 201
 
 
-async def test_bot_refuses_a_start_date_that_does_not_fit_the_tariff(h):
+async def test_bot_does_not_ask_the_start_date(h):
+    # «used N of 12» comes from the end date minus the tariff: the start date is no longer asked
     await h.send(SELLER, "/start")
     await h.click(SELLER, "lang:ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:city:tashkent")
     await h.click(SELLER, "sl:plan:365")
-    await h.send(SELLER, (today_local() + timedelta(days=200)).strftime("%d.%m.%Y"))
-    wrong = texts(await h.send(SELLER, (today_local() - timedelta(days=260)).strftime("%d.%m.%Y")))
-    assert "Даты не совпадают с тарифом" in wrong
-    ok = texts(await h.send(SELLER, (today_local() - timedelta(days=165)).strftime("%d.%m.%Y")))
-    assert "Как оплачен абонемент" in ok
+    nxt = texts(await h.send(SELLER, (today_local() + timedelta(days=200)).strftime("%d.%m.%Y")))
+    assert "Как оплачен абонемент" in nxt and "Дата начала" not in nxt
 
 
 def test_payments_left_are_guessed_from_the_end_date():
@@ -454,7 +450,6 @@ async def test_bot_offers_the_number_of_payments(h):
     await h.click(SELLER, "sl:city:tashkent")
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, (today_local() + timedelta(days=200)).strftime("%d.%m.%Y"))
-    await h.click(SELLER, "sl:skip:")
     await h.click(SELLER, "sl:pay:installment")
     ask = texts(await h.send(SELLER, "500 000"))
     assert "По дате окончания — <b>7</b>" in ask and h.button(SELLER, "Да, 7") == "sl:leftok:7"

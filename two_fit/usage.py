@@ -11,7 +11,12 @@ MONTHS_FROM_DAYS = 60  # shorter memberships are counted in days
 def remaining(end_iso: str, today: date) -> dict[str, Any]:
     """What the buyer actually gets: «7 months» or «45 days» from today to the end date.
     It replaces the tariff name: «12 months» made buyers think they got all 12."""
-    days = max((date.fromisoformat(end_iso) - today).days, 0)
+    return span((date.fromisoformat(end_iso) - today).days)
+
+
+def span(days: int) -> dict[str, Any]:
+    """«7 months» or «45 days» for a number of days."""
+    days = max(days, 0)
     if days >= MONTHS_FROM_DAYS:
         return {"n": max(1, round(days / DAYS_PER_MONTH)), "unit": "m"}
     return {"n": days, "unit": "d"}
@@ -25,8 +30,9 @@ def payments_guess(end_iso: str, today: date, most: int = 60) -> int:
 
 
 def usage(start_iso: str | None, end_iso: str, today: date, plan_days: int | None = None) -> dict[str, Any] | None:
-    """With no start date, the tariff gives it: a 12-month membership ending in May started a year before."""
-    if not start_iso and plan_days:
+    """The tariff gives the start: a 12-month membership ending in May started a year before. A typed start date
+    is used only without a tariff (old listings): sellers got it wrong («1 сентября» for a card begun in April)."""
+    if plan_days:
         start_iso = (date.fromisoformat(end_iso) - timedelta(days=plan_days)).isoformat()
     if not start_iso:
         return None

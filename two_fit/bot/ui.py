@@ -18,7 +18,7 @@ from ..i18n import LANGS
 from ..money import fmt_money, round_k
 from ..pricing import Advice, advise
 from ..repo import LS, TZ, Repo, today_local
-from ..usage import remaining, usage
+from ..usage import remaining, span, usage
 from .callbacks import NOOP, LangCb
 from .context import Ctx
 
@@ -136,6 +136,12 @@ def usage_line(ctx: Ctx, data: dict[str, Any]) -> str:
     )
 
 
+def span_text(ctx: Ctx, days: int) -> str:
+    """«10 мес.» / «45 дн.» for a number of days left."""
+    r = span(days)
+    return f"{r['n']} " + ctx.t(f"app.unit.{r['unit']}")
+
+
 def left_text(ctx: Ctx, end_iso: str) -> str:
     r = remaining(end_iso, today_local())
     unit = ctx.t(f"app.unit.{r['unit']}")
@@ -182,8 +188,9 @@ def advice_text(ctx: Ctx, a: Advice) -> str:
     """«Recommended price … ≈ … per month, 1Fit … per month» for the price step."""
     if not a.max_price:  # the installments alone cost about as much as 1Fit
         return ctx.t("advice.heavy", total=fmt_money(a.installments), price=fmt_money(a.recommended))
-    text = ctx.t("advice.block", price=fmt_money(a.recommended), month=fmt_money(round_k(a.month_cost(a.recommended))),
-                 fit_month=fmt_money(round_k(a.fit_month)), saving=a.saving(a.recommended))
+    text = ctx.t("advice.block", price=fmt_money(a.recommended), left=span_text(ctx, a.days_left),
+                 total=fmt_money(round_k(a.total(a.recommended))), fit_total=fmt_money(round_k(a.fit_value)),
+                 saving=a.saving(a.recommended))
     if a.installments:
         text += ctx.t("advice.installment", total=fmt_money(a.installments))
     return text + ctx.t("advice.max", max=fmt_money(a.max_price))
@@ -210,7 +217,8 @@ def month_line(ctx: Ctx, data: dict[str, Any]) -> str:
     if not a or not data.get("price") or a.saving(data["price"]) <= 0:
         return ""
     price = data["price"]
-    return ctx.t("card.month", month=fmt_money(round_k(a.month_cost(price))), fit_month=fmt_money(round_k(a.fit_month)),
+    return ctx.t("card.month", left=span_text(ctx, a.days_left), total=fmt_money(round_k(a.total(price))),
+                 fit_total=fmt_money(round_k(a.fit_value)),
                  saving=a.saving(price), saved=fmt_money(round_k(a.saved(price))))
 
 

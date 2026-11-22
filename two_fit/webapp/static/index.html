@@ -518,19 +518,19 @@ function confirmSheet(title, rows, okText, backText) {
 const leftText = (l, key) => T(key || "app.left", { n: l.left.n, unit: T("app.unit." + l.left.unit) });
 const promoBadge = (l) => isPromo(l) ? [h("span", { class: "badge ptype inst" }, "🎁 " + T("app.badge.promo")), " "] : null;
 const payBadge = (l) => installment(l) ? h("span", { class: "badge ptype inst" }, T("app.pay.installment_row", installmentVars(l))) : null;
-// «≈ 459 000 сум/мес · у 1Fit 658 000 (−30%)»: buyers compare with 1Fit's monthly installments, not the total.
+// «5 380 000 сум за 10 мес. вместо 6 330 000»: the whole sum for the days left, installments included, next to 1Fit.
 // A price far too low for the whole term («485 000 for 9 months») is flagged, never shown as a −92% bargain.
 const suspicious = (l) => !!(l.month_cost && l.month_cost.suspicious);
 // «🔥 Saving 38%»: only for a real saving, never for a suspiciously low price.
 const saveFlag = (l) => l.month_cost && !suspicious(l) && l.month_cost.saving >= SAVE_BADGE_MIN
   ? h("span", { class: "flag save num" }, "🔥 " + T("app.badge.saving", { saving: l.month_cost.saving })) : null;
 const SAVE_BADGE_MIN = 5;  // a 2% saving is noise, not a selling point
-// In words a buyer understands: «29% cheaper than at 1Fit · 465 000 a month instead of 658 000».
+// In words a buyer understands: the whole sum for the months left, not a per-month figure.
 const monthCost = (l, big) => {
   const m = l.month_cost;
   if (!m) return null;
   if (suspicious(l)) return h("div", { class: "month-cost warn" }, T("app.month_suspicious"));
-  const vars = { month: money(m.month), fit_month: money(m.fit_month), saving: m.saving, saved: money(m.saved) };
+  const vars = { total: money(m.total), fit_total: money(m.fit_total), left: leftText(l), saving: m.saving, saved: money(m.saved) };
   return big
     ? h("div", { class: "month-cost num" }, h("b", null, T("app.mc.hero_title", vars)), h("div", null, T("app.mc.hero_text", vars)),
         m.saved ? h("div", { class: "save-cta" }, "💸 " + T("app.mc.hero_save", vars)) : null)
@@ -582,7 +582,6 @@ function publicRows(l) {
     isPromo(l)
       ? h("div", null, h("span", { class: "k" }, T("app.f.what_promo")), h("span", { class: "v" }, l.tariff))
       : h("div", null, h("span", { class: "k" }, T("app.f.time_left")), h("span", { class: "v num" }, leftText(l))),
-    l.start_date ? h("div", null, h("span", { class: "k" }, T("app.f.start")), h("span", { class: "v num" }, dmy(l.start_date))) : null,
     h("div", null, h("span", { class: "k" }, T(isPromo(l) ? "app.f.date_promo" : "app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))),
     l.freeze_days ? h("div", null, h("span", { class: "k" }, "❄️ " + T("app.f.freeze_short")),
       h("span", { class: "v num" }, T("app.freeze_row", { days: l.freeze_days }))) : null,
@@ -695,8 +694,19 @@ function sellForm(d, onDone, onKind) {
   const tariff = bind(h("input", { type: "text", maxLength: L.tariff_max, placeholder: T("app.sell.what_promo_ph"), value: d.tariff }), "tariff");
   const date = bind(h("input", { type: "date", min: L.date_min, max: L.date_max, value: d.end_date }), "end_date");
   date.addEventListener("change", () => { d.end_date = date.value; guessLeft(); loadAdvice(); });
-  const start = bind(h("input", { type: "date", min: L.start_min, max: L.start_max, value: d.start_date }), "start_date");
-  start.addEventListener("change", () => { d.start_date = start.value; });
+  // The end date comes from the screenshot of the 1Fit card: shown as read, typed only when it was not read
+  // or the seller taps «Correct» (typed dates were the mistakes: «до 11.09.2027» next to a card «до 18.04.2027»).
+  const dateShot = h("div", { class: "row" });
+  const drawDate = () => {
+    const locked = d.kind === "membership" && d.dateFromShot && d.end_date;
+    date.hidden = !!locked;
+    dateShot.hidden = !locked;
+    if (locked) {
+      dateShot.replaceChildren(h("div", { class: "grow num" }, "📸 " + T("app.sell.date_from_shot", { date: dmy(d.end_date) })),
+        h("button", { class: "btn small ghost", type: "button", onclick: () => { d.dateFromShot = false; drawDate(); date.focus(); } },
+          T("app.sell.date_fix")));
+    }
+  };
 
   // What is sold: a membership (15%) or a promo code (30%). Fixed once listed.
   const kindErr = h("div", { class: "err", hidden: true });
@@ -804,7 +814,7 @@ function sellForm(d, onDone, onKind) {
       h("div", { class: "row" }, h("div", { class: "value num" }, money(advice.recommended) + " " + T("app.sum"))),
       d.end_date ? h("p", { class: "giving num" }, "📦 " + T("app.sell.giving", { left: leftFor(d.end_date), date: dmy(d.end_date) })) : null,
       h("p", null, T("app.sell.price_auto_hint")),
-      advice.max ? h("p", null, T("app.advice.text", { month: money(advice.month), fit_month: money(advice.fit_month), saving: advice.saving }))
+      advice.max ? h("p", null, T("app.advice.text", { total: money(advice.total), fit_total: money(advice.fit_total), left: d.end_date ? leftFor(d.end_date) : "", saving: advice.saving }))
         : h("p", null, T("app.advice.heavy", { total: money(advice.installments) })),
       advice.max && advice.installments ? h("p", null, T("app.advice.installment", { total: money(advice.installments) })) : null,
     ].filter(Boolean));
@@ -824,7 +834,7 @@ function sellForm(d, onDone, onKind) {
       h("div", { class: "label" }, "💡 " + T("app.advice.title")),
       h("div", { class: "row" }, h("div", { class: "value num" }, money(advice.recommended) + " " + T("app.sum")), use),
       advice.max
-        ? h("p", null, T("app.advice.text", { month: money(advice.month), fit_month: money(advice.fit_month), saving: advice.saving }))
+        ? h("p", null, T("app.advice.text", { total: money(advice.total), fit_total: money(advice.fit_total), left: d.end_date ? leftFor(d.end_date) : "", saving: advice.saving }))
         : h("p", null, T("app.advice.heavy", { total: money(advice.installments) })),
       advice.max && advice.installments ? h("p", null, T("app.advice.installment", { total: money(advice.installments) })) : null,
       advice.max ? h("p", null, T("app.advice.max", { max: money(advice.max) })) : null].filter(Boolean));
@@ -875,8 +885,10 @@ function sellForm(d, onDone, onKind) {
     if (read.tariff_days && !d.plan && B.limits.plans.includes(read.tariff_days)) {
       d.plan = read.tariff_days; drawPlan(); filled.push(T("app.f.plan"));
     }
-    if (read.end_date && !d.end_date) { d.end_date = date.value = read.end_date; filled.push(T("app.f.date")); }
-    if (read.start_date && !d.start_date) { d.start_date = start.value = read.start_date; filled.push(T("app.f.start")); }
+    // The card's date wins over an empty or earlier-read one, never over a date the seller corrected by hand.
+    if (read.end_date && d.kind === "membership" && (!d.end_date || d.dateFromShot)) {
+      d.end_date = date.value = read.end_date; d.dateFromShot = true; drawDate(); filled.push(T("app.f.date"));
+    } else if (read.end_date && !d.end_date) { d.end_date = date.value = read.end_date; filled.push(T("app.f.date")); }
     if (read.freeze_days && !d.freeze) {
       d.freeze = freeze.checked = true; d.freezeDays = freezeDays.value = String(read.freeze_days);
       drawFreeze(); filled.push(T("app.f.freeze_short"));
@@ -914,8 +926,7 @@ function sellForm(d, onDone, onKind) {
     city: field(T("app.f.city"), citySel),
     tariff_days: planWrap,
     tariff: field(T("app.f.what_promo"), tariff),
-    end_date: field(T("app.f.date"), date),
-    start_date: field(T("app.f.start"), start, { hint: T("app.sell.start_hint") }),
+    end_date: field(T("app.f.date"), date, { extra: dateShot }),
     payment: payWrap,
     monthly_payment: field(T("app.f.monthly"), monthly),
     payments_left: field(T("app.f.left"), left, { hint: T("app.sell.left_hint") }),
@@ -942,12 +953,11 @@ function sellForm(d, onDone, onKind) {
     kindSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.kind === b.dataset.kind)));
     fields.kind.hidden = !!d.id;  // an existing listing keeps what it sells
     fields.promo_code.hidden = !promo;
-    fields.start_date.hidden = promo;
     fields.tariff_days.hidden = promo;
     drawPlan();
     payCard.hidden = promo;
     freezeCard.hidden = promo;
-    drawFreeze(); drawPriceMode();
+    drawFreeze(); drawPriceMode(); drawDate();
     fields.tariff.hidden = !promo;  // only a promo code says what it gives
     label(fields.end_date).textContent = T(promo ? "app.f.date_promo" : "app.f.date");
     acceptText.textContent = T("app.sell.accept", { percent: pct(d.kind) });
@@ -983,7 +993,7 @@ function sellForm(d, onDone, onKind) {
     if (!(await confirmSheet(T("app.confirm.title"), summaryRows(), T("app.confirm.ok"), T("app.confirm.back")))) return;
     submit.disabled = true;
     const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null,
-                   freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date, start_date: d.start_date || null, price: d.price, price_negotiable: d.negotiable,
+                   freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date, start_date: null, price: d.price, price_negotiable: d.negotiable,
                    kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
                    paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
                    description: d.description, accepted_price: Number(d.price), screenshots: d.shots };
@@ -1007,7 +1017,7 @@ function sellForm(d, onDone, onKind) {
   } },
     d.id || !B.vars.promo_enabled ? null : h("div", { class: "card" }, fields.kind),
     h("div", { class: "card" }, shotRow, file),
-    h("div", { class: "card" }, fields.city, fields.tariff_days, fields.tariff, fields.end_date, fields.start_date, fields.promo_code),
+    h("div", { class: "card" }, fields.city, fields.tariff_days, fields.tariff, fields.end_date, fields.promo_code),
     payCard,
     freezeCard,
     adviceCard,

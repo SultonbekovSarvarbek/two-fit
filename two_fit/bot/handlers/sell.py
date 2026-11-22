@@ -83,7 +83,7 @@ PROMO_ONLY = ("tariff", "code")  # a membership has no tariff: «12 months» mis
 STATE_OF = {s: getattr(SellForm, s) for s in STEPS}
 # Steps shown as «Step n/total»; the installment answers and the phone belong to the step before them.
 NUMBERED = {
-    LK.MEMBERSHIP: ["city", "plan", "date", "start", "payment", "freeze", "price", "desc", "photo", "name"],
+    LK.MEMBERSHIP: ["city", "plan", "date", "payment", "freeze", "price", "desc", "photo", "name"],
     LK.PROMO: ["city", "tariff", "date", "code", "price", "desc", "photo", "name"],
 }
 FIELDS = {  # field in «Change» menu -> first step to ask
@@ -103,6 +103,8 @@ def _installment(data: dict) -> bool:
 
 
 def _skipped(data: dict, step: str) -> bool:
+    if step == "start":  # no longer asked: «used N of 12» comes from the end date minus the tariff
+        return True
     if _kind(data) == LK.PROMO:
         return step in MEMBERSHIP_ONLY
     if step == "price" and data.get("auto_price"):  # worked out from the tariff, the end date and the installments
