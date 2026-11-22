@@ -181,16 +181,6 @@ p { margin: 0; }
 .advice p.giving { opacity: 1; margin: 2px 0; padding: 11px 13px; border-radius: 13px; background: var(--lime);
   color: var(--ink); font-size: 15px; font-weight: 700; line-height: 1.35; }
 .advice p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--text); opacity: 0.78; }
-/* The per-month comparison is the point of the card, so it gets the main text colour, not the faint hint:
-   on the lime price card the hint grey of the dark theme all but vanished. */
-.month-cost { font-size: 13px; font-weight: 500; color: var(--text); opacity: 0.82; margin-top: 6px; }
-.hero .month-cost { font-size: 14px; font-weight: 500; color: var(--ink); opacity: 1; margin-top: 12px; line-height: 1.4; }
-.month-cost b { font-weight: 700; }
-.hero .month-cost b { font-size: 16px; }
-/* «Купите сразу и сэкономьте ≈ 2 038 000 сум»: the reason to buy now, set apart on the price card */
-.save-cta { margin-top: 10px; padding: 9px 12px; border-radius: 12px; background: rgba(21, 21, 15, 0.1); font-weight: 700; }
-.month-cost.warn { color: var(--danger); font-weight: 600; opacity: 1; }
-.hero .month-cost.warn { color: #8A1C12; }
 
 /* buttons */
 .btn {
@@ -494,7 +484,7 @@ function listingRow(l, onclick, extra) {
     h("div", { class: "main" },
       h("div", { class: "title" }, isPromo(l) ? l.tariff : leftText(l, "app.left_title")),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
-      usageBar(l), extra || promoBadge(l), monthCost(l)),  // negotiable and installments: on the listing itself
+      usageBar(l), extra || promoBadge(l)),  // negotiable and installments: on the listing itself
     h("div", { class: "price num" }, money(buyerTotal(l)), h("small", null, T("app.sum"))));
 }
 function cheapestFlag() {
@@ -548,17 +538,6 @@ const suspicious = (l) => !!(l.month_cost && l.month_cost.suspicious);
 const saveFlag = (l) => l.month_cost && !suspicious(l) && l.month_cost.saving >= SAVE_BADGE_MIN
   ? h("span", { class: "flag save num" }, "🔥 " + T("app.badge.saving", { saving: l.month_cost.saving })) : null;
 const SAVE_BADGE_MIN = 5;  // a 2% saving is noise, not a selling point
-// In words a buyer understands: the whole sum for the months left, not a per-month figure.
-const monthCost = (l, big) => {
-  const m = l.month_cost;
-  if (!m) return null;
-  if (suspicious(l)) return h("div", { class: "month-cost warn" }, T("app.month_suspicious"));
-  const vars = { total: money(m.total), fit_total: money(m.fit_total), left: leftText(l), saving: m.saving, saved: money(m.saved) };
-  return big
-    ? h("div", { class: "month-cost num" }, h("b", null, T("app.mc.hero_title", vars)),
-        m.saved ? h("div", { class: "save-cta" }, "💸 " + T("app.mc.hero_save", vars)) : null)
-    : h("div", { class: "month-cost num" }, T("app.mc.row_text", vars));  // the saving itself is in the badge
-};
 const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.negotiable") : "");
 
 async function fetchCatalog(reset) {
@@ -615,7 +594,7 @@ function priceHero(l) {
   return h("div", { class: "card hero" },
     h("div", { class: "label" }, T("app.f.price")),
     h("div", { class: "value num" }, money(buyerTotal(l)) + " ", h("small", null, T("app.sum"))),
-    saveFlag(l), promoBadge(l), priceBadge(l), monthCost(l, true));
+    saveFlag(l), promoBadge(l), priceBadge(l));
 }
 
 function listingView(view, rev) {

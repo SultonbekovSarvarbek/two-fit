@@ -165,7 +165,6 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
     )
     if data.get("price_negotiable"):
         text += ctx.t("card.negotiable")
-    text += month_line(ctx, data)
     if installments:
         text += payment_line(ctx, data)
     if data.get("freeze_days"):
@@ -208,20 +207,6 @@ def saving_mark(ctx: Ctx, data: dict[str, Any]) -> str:
     if not a or not price or a.suspicious(price) or a.saving(price) < SAVE_BADGE_MIN:
         return ""
     return ctx.t("catalog.saving", saving=a.saving(price))
-
-
-def month_line(ctx: Ctx, data: dict[str, Any]) -> str:
-    """«≈ 459 000 сум/мес · у 1Fit 658 000 (−30%)» — the per-month cost the buyer compares with 1Fit."""
-    a = price_advice(ctx, data)
-    if a and data.get("price") and a.suspicious(data["price"]):
-        # Not a 92% discount: almost surely the monthly price. Tell the buyer to check, never boast.
-        return ctx.t("card.suspicious")
-    if not a or not data.get("price") or a.saving(data["price"]) <= 0:
-        return ""
-    price = data["price"]
-    return ctx.t("card.month", left=span_text(ctx, a.days_left), total=fmt_money(round_k(a.total(price))),
-                 fit_total=fmt_money(round_k(a.fit_value)),
-                 saving=a.saving(price), saved=fmt_money(round_k(a.saved(price))))
 
 
 def buyer_total(data: dict[str, Any]) -> int:

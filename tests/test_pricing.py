@@ -116,17 +116,16 @@ async def test_bot_refuses_a_price_dearer_than_1fit(h):
     assert "намного дешевле" in ok
 
 
-async def test_card_shows_the_total_for_the_months_left(h):
+async def test_card_shows_the_whole_price_without_the_1fit_comparison(h):
     await walk_to_price(h)
     await h.send(SELLER, "2 000 000")
     await h.click(SELLER, "sl:skip:")
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
-    # In words: «it comes to … a month — 1Fit charges … a month; … cheaper, you save ≈ …», round sums
     assert "💰 Цена: <b>2\xa0000\xa0000 сум</b>" in preview  # fully paid: the whole sum is the price
-    assert "📉 В 1Fit те же " in preview and "Купите сразу и сэкономьте ≈" in preview
-    assert "в месяц" not in preview  # the whole sum for the months left, not a per-month figure
+    assert "В 1Fit те же" not in preview and "сэкономьте" not in preview  # no comparison with 1Fit on the card
+    assert "в месяц" not in preview
 
 
 def _key(h):
@@ -291,7 +290,7 @@ async def test_api_needs_a_tariff_and_asks_about_a_suspicious_price(h, api):  # 
     assert cat["items"][0]["month_cost"] == {"suspicious": True}  # flagged, not a «−92%» bargain
 
 
-async def test_bot_card_flags_a_suspicious_price(h):
+async def test_bot_card_has_no_low_price_warning(h):
     await walk_to_price(h)
     await h.send(SELLER, "300 000")
     await h.click(SELLER, "sl:lowok:300000")
@@ -299,7 +298,7 @@ async def test_bot_card_flags_a_suspicious_price(h):
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
-    assert "Очень низкая цена" in preview and "сэкономьте" not in preview
+    assert "Очень низкая цена" not in preview and "сэкономьте" not in preview  # buyers get no such warning
     assert "Использовано" in preview  # the 12-month tariff gives «used … of 12 months» without a start date
 
 
@@ -380,7 +379,7 @@ async def test_catalog_explains_the_saving(h, api):  # noqa: F811
     assert set(m) == {"total", "fit_total", "saving", "saved"}
     assert m["total"] % 1000 == 0 and m["fit_total"] % 1000 == 0 and m["saved"] > 0
     _, boot = await api.call("GET", "/api/bootstrap", SELLER)
-    assert {"app.badge.saving", "app.mc.row_text", "app.mc.hero_title", "app.mc.hero_text"} <= set(boot["texts"])
+    assert "app.badge.saving" in boot["texts"] and not any(k.startswith("app.mc.") for k in boot["texts"])
 
 
 
