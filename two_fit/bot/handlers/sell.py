@@ -111,6 +111,8 @@ def _skipped(data: dict, step: str) -> bool:
         return step in MEMBERSHIP_ONLY
     if step == "price" and data.get("auto_price"):  # worked out from the tariff, the end date and the installments
         return True
+    if step == "price" and _installment(data):  # the price is the payments left: monthly × how many
+        return True
     if step == "freeze_days":  # asked only after «yes, there are freeze days»
         return not (data.get("draft") or {}).get("has_freeze")
     return step in PROMO_ONLY or (step in INSTALLMENT_STEPS and not _installment(data))
@@ -236,6 +238,10 @@ def _advice_rows(ctx: Ctx, draft: dict) -> list:
 async def advance(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
     """Go to the step after ``step`` — or back to the preview when editing a single field."""
     data = await state.get_data()
+    if step in ("monthly", "left") and installment_price(data.get("draft") or {}):
+        d = data["draft"]  # the price step is skipped: say what the price came to
+        await message.answer(ctx.t("sell.price_installment", price=fmt_money(d["price"]),
+                                   monthly=fmt_money(d["monthly_payment"]), left=d["payments_left"]))
     has_freeze = bool((data.get("draft") or {}).get("has_freeze"))
     if step == "name" or (step in ("payment", "monthly") and _installment(data)) or (step == "freeze" and has_freeze):
         # Steps that belong together: name -> phone, installment -> monthly payment -> payments left.
@@ -247,10 +253,24 @@ async def advance(message: Message, state: FSMContext, ctx: Ctx, step: str) -> N
     await ask(message, state, ctx, _neighbour(data, step, 1))
 
 
+def installment_price(draft: dict) -> int | None:
+    """An installment membership costs what is left to pay 1Fit: 500 000 a month × 9 payments = 4 500 000."""
+    if draft.get("kind", LK.MEMBERSHIP) == LK.MEMBERSHIP and draft.get("paid_in_full") is False \
+            and draft.get("monthly_payment") and draft.get("payments_left"):
+        return draft["monthly_payment"] * draft["payments_left"]
+    return None
+
+
 async def draft_update(state: FSMContext, **values) -> dict:
     data = await state.get_data()
     draft = dict(data.get("draft") or {})
+    was_installment = installment_price(draft) is not None
     draft.update(values)
+    price = installment_price(draft)
+    if price is not None:
+        draft["price"] = price
+    elif was_installment and draft.get("paid_in_full"):
+        draft["price"] = None  # now fully paid: the seller names the price
     await state.update_data(draft=draft)
     return draft
 
@@ -300,7 +320,7 @@ def preview_kb(ctx: Ctx, data: dict, fee: int = 0) -> InlineKeyboardMarkup:
 async def apply_auto_price(state: FSMContext, ctx: Ctx) -> None:
     """With AUTO_PRICE a membership costs the recommended price, recounted when the answers change."""
     data = await state.get_data()
-    if not data.get("auto_price") or _kind(data) != LK.MEMBERSHIP:
+    if not data.get("auto_price") or _kind(data) != LK.MEMBERSHIP or _installment(data):
         return
     draft = data.get("draft") or {}
     a = price_advice(ctx, draft) if draft.get("tariff_days") else None
@@ -309,6 +329,11 @@ async def apply_auto_price(state: FSMContext, ctx: Ctx) -> None:
 
 
 async def show_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    data = await state.get_data()
+    if not (data.get("draft") or {}).get("price") and not _skipped(data, "price"):
+        await state.update_data(single=True)
+        await ask(message, state, ctx, "price")
+        return
     await state.set_state(SellForm.preview)
     await state.update_data(single=False)
     await apply_auto_price(state, ctx)
@@ -923,7 +948,7 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
         await state.update_data(single=True)
         await ask(call.message, state, ctx, "payment")
         return
-    a = price_advice(ctx, draft)
+    a = None if installment_price(draft) else price_advice(ctx, draft)
     if a and a.too_high(draft["price"]):
         # The end date or the installments changed after the price was set: the price is now above the limit.
         await call.answer()

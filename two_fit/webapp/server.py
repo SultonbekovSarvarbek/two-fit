@@ -372,7 +372,12 @@ class WebApp:
         else:
             self._membership_fields(ctx, body, draft, number)
         a = price_advice(ctx, draft)
-        if a and self.cfg.auto_price:
+        if kind != LK.PROMO and draft.get("paid_in_full") is False:
+            # Installments: the price is what is left to pay 1Fit, worked out here — the app sends no price.
+            total = draft["monthly_payment"] * draft["payments_left"]
+            draft["price"] = self._field(ctx, "monthly_payment", parse_price, str(total))
+            a = None  # no recommended price, no limits: the sum is fixed by 1Fit
+        elif a and self.cfg.auto_price:
             # The price is the recommended one, worked out here: whatever the app sent is not trusted.
             # It then keeps following the days left: Repo.reprice lowers it every day.
             draft["price"] = a.recommended

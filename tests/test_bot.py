@@ -315,28 +315,29 @@ async def test_installment_wizard_and_card(h):
     assert "цифрами" in texts(await h.send(SELLER, "много"))
     assert "платежей" in texts(await h.send(SELLER, "500 000"))
     assert "от 1 до 60" in texts(await h.send(SELLER, "100"))
-    assert "Шаг 5/9" in texts(await h.send(SELLER, "9")) # then the freeze question
-    ask_price = texts(await h.click(SELLER, "sl:freeze:no"))
-    assert "заплатит вам сейчас" in ask_price and "500\xa0000 сум × 9" in ask_price
-    # Back from the price goes to the freeze question; «yes» then asks how many days
-    assert "заморозки" in texts(await h.click(SELLER, "sl:back:"))
+    # no price question with installments: the price is monthly × payments left, said right away
+    after_left = texts(await h.send(SELLER, "9"))
+    assert "Цена: <b>4\xa0500\xa0000 сум</b> — 500\xa0000 сум × 9" in after_left
+    assert "Шаг 5/8" in after_left  # then the freeze question; one step fewer
     assert "Сколько дней" in texts(await h.click(SELLER, "sl:freeze:yes"))
     assert "от 1 до 365" in texts(await h.send(SELLER, "0"))
+    ask_desc = texts(await h.send(SELLER, "20"))
+    assert "описание" in ask_desc.lower() and "Цена продажи" not in ask_desc  # straight past the price
+    assert "заморозки" in texts(await h.click(SELLER, "sl:back:"))  # back skips the price too
+    await h.click(SELLER, "sl:freeze:yes")
     await h.send(SELLER, "20")
-    await h.send(SELLER, "300 000")
     await h.click(SELLER, "sl:skip:")
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
-    # buyers see exactly the price the seller set: the installments are not added to it
-    assert "💰 Цена: <b>300\xa0000 сум</b>" in preview and "4\xa0800\xa0000" not in preview
+    assert "💰 Цена: <b>4\xa0500\xa0000 сум</b>" in preview
     assert "Рассрочка" not in preview
     assert "❄️ Заморозка: осталось 20 дн." in preview
     await h.click(SELLER, "sl:send:")
     listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
     assert (listing["paid_in_full"], listing["monthly_payment"], listing["payments_left"]) == (0, 500_000, 9)
     assert listing["freeze_days"] == 20
-    assert listing["price"] == 300_000
+    assert listing["price"] == 4_500_000
 
 
 async def test_only_12_and_24_month_tariffs_can_be_sold(h):

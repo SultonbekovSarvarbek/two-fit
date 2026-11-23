@@ -695,6 +695,18 @@ function sellForm(d, onDone, onKind) {
   freeze.addEventListener("change", () => { d.freeze = freeze.checked; drawFreeze(); });
   const monthly = digitsInput("monthly", 9, "500 000");
   const left = digitsInput("left", 2, "9");
+  // Installments: no price to type — it is what is left to pay 1Fit, monthly × payments left.
+  const isInst = () => d.kind === "membership" && d.paid === false;
+  const instLine = h("div", { class: "callout", hidden: true });
+  const drawInst = () => {
+    instLine.hidden = !isInst();
+    if (!isInst()) return;
+    const m = Number(d.monthly), n = Number(d.left);
+    if (m && n) d.price = String(m * n);
+    instLine.textContent = "💰 " + T("app.sell.price_installment",
+      { monthly: m ? money(m) : "…", left: n || "…", price: m && n ? money(m * n) : "…" });
+  };
+  [monthly, left].forEach((el) => el.addEventListener("input", () => drawInst()));
   monthly.addEventListener("input", () => loadAdvice());
   left.addEventListener("input", () => { d.leftTyped = true; loadAdvice(); });
   // Usually one payment per month until the end date: filled in, the seller only corrects it.
@@ -731,7 +743,7 @@ function sellForm(d, onDone, onKind) {
     priceWarn.hidden = !text;
   };
   // AUTO_PRICE: a membership costs the recommended price; the card shows it instead of a price field.
-  const autoPrice = () => B.vars.auto_price && d.kind === "membership";
+  const autoPrice = () => B.vars.auto_price && d.kind === "membership" && d.paid !== false;
   const drawAuto = () => {
     adviceCard.hidden = false;
     if (!advice) {
@@ -755,7 +767,7 @@ function sellForm(d, onDone, onKind) {
       drawAuto();
       return;
     }
-    const show = d.kind === "membership" && advice;
+    const show = d.kind === "membership" && advice && !isInst();
     adviceCard.hidden = !show;
     if (!show) { drawAdviceCheck(); return; }
     const use = h("button", { class: "btn small", type: "button", onclick: () => { setPrice(String(advice.recommended)); haptic("success"); } },
@@ -870,13 +882,15 @@ function sellForm(d, onDone, onKind) {
   const payCard = h("div", { class: "card" }, fields.payment, fields.monthly_payment, fields.payments_left);
   const freezeCard = h("div", { class: "card" }, freezeRow, fields.freeze_days);
   const drawFreeze = () => { fields.freeze_days.hidden = !d.freeze; };
-  const drawPriceMode = () => { fields.price.hidden = autoPrice(); };
+  const drawPriceMode = () => { fields.price.hidden = autoPrice() || isInst(); drawInst(); };
   const drawPay = () => {
     paySeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.paid === (b.dataset.full === "true"))));
     fields.monthly_payment.hidden = fields.payments_left.hidden = d.paid !== false;
     if (d.paid === false) guessLeft();
     priceHint.textContent = T(d.kind === "promo" ? "app.sell.price_hint_promo"
       : d.paid === false ? "app.sell.price_hint_installment" : "app.sell.price_hint");
+    drawPriceMode();
+    if (!isInst()) setPrice(d.price || "");  // back to fully paid: the field shows what is there
   };
   const drawKind = () => {
     const promo = d.kind === "promo";
@@ -954,7 +968,7 @@ function sellForm(d, onDone, onKind) {
     payCard,
     freezeCard,
     adviceCard,
-    h("div", { class: "card" }, fields.price, priceWarn, negotiableRow),
+    h("div", { class: "card" }, fields.price, instLine, priceWarn, negotiableRow),
     h("div", { class: "card" }, fields.description),
     h("h2", null, T("app.sell.contacts")),
     h("div", { class: "card" }, fields.name, fields.phone),

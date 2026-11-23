@@ -513,5 +513,7 @@
   "sell.instagram": "📸 Подпишитесь, пожалуйста, на наш Instagram — там новости 2FIT и свежие абонементы. Спасибо!",
   "sell.instagram_btn": "📸 Подписаться на Instagram 2FIT",
   "app.sell.instagram": "Подпишитесь, пожалуйста, на наш Instagram — там новости 2FIT и свежие абонементы.",
-  "app.sell.instagram_btn": "Подписаться на Instagram"
+  "app.sell.instagram_btn": "Подписаться на Instagram",
+  "sell.price_installment": "💰 Цена: <b>{price} сум</b> — {monthly} сум × {left}. Считается сама по рассрочке, вводить не нужно.",
+  "app.sell.price_installment": "Цена считается сама по рассрочке: {monthly} сум × {left} = {price} сум."
 }

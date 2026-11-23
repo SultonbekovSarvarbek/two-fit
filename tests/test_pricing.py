@@ -542,3 +542,18 @@ def test_seller_tariff_does_not_lower_the_base():
     assert a.base_days == 180 and a.fit_value == round(147 / 180 * 5_890_000)
     with_installments = advise(end_in(147), TODAY, None, 532_500, 5, plan_days=365)
     assert with_installments.recommended == 1_420_000
+
+
+async def test_installment_price_follows_the_payments_left(h):
+    """An installment listing costs monthly × payments left: one payment fewer a month, the price follows."""
+    await h.repo.touch_user(SELLER, "s", "S")
+    lid, _ = await _auto_listing(h.repo, paid_in_full=False, monthly_payment=500_000, payments_left=3,
+                                 price=1_500_000, price_auto=False)
+    await h.repo.reprice(today_local() + timedelta(days=31))
+    listing = await h.repo.get_listing(lid)
+    assert (listing["payments_left"], listing["price"]) == (2, 1_000_000)
+    # a price the seller typed (not monthly × left) is left alone
+    typed, _ = await _auto_listing(h.repo, paid_in_full=False, monthly_payment=500_000, payments_left=3,
+                                   price=700_000, price_auto=False)
+    await h.repo.reprice(today_local() + timedelta(days=31))
+    assert (await h.repo.get_listing(typed))["price"] == 700_000

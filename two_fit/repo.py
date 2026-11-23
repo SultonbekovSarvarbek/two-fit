@@ -755,11 +755,16 @@ class Repo:
                 if listing["paid_in_full"] == 0 and left and as_of:
                     paid = int((today - date.fromisoformat(as_of)).days // DAYS_PER_MONTH)
                     if paid > 0:
+                        # the price was «monthly × payments left»: it follows the payments down
+                        derived = listing["price"] == listing["monthly_payment"] * listing["payments_left"]
                         left = max(0, left - paid)
                         as_of = (date.fromisoformat(as_of) + timedelta(days=round(paid * DAYS_PER_MONTH))).isoformat()
                         if left:
                             await self.db.execute("UPDATE listings SET payments_left=?, payments_as_of=? WHERE id=?",
                                                   (left, as_of, listing["id"]))
+                            if derived:
+                                await self.db.execute("UPDATE listings SET price=? WHERE id=?",
+                                                      (listing["monthly_payment"] * left, listing["id"]))
                         else:  # all paid off: from now on it is a fully paid membership
                             await self.db.execute(
                                 "UPDATE listings SET paid_in_full=1, monthly_payment=NULL, payments_left=NULL, "
