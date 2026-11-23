@@ -27,7 +27,7 @@ from ..bot.payments import fee_invoice_link
 from ..bot.ui import btn, kb, price_advice
 from ..config import Config
 from .. import ocr
-from ..money import fmt_money, round_k
+from ..money import round_k
 from ..ocr import MAX_SCREENSHOTS
 from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
@@ -384,14 +384,7 @@ class WebApp:
             draft["price_auto"] = True
         else:
             draft["price"] = self._field(ctx, "price", parse_price, raw_price)
-        if a and not self.cfg.auto_price and a.too_high(draft["price"]):
-            raise ApiError(400, "price_too_high", ctx.t("err.price_too_high", max=fmt_money(a.max_price),
-                                                        price=fmt_money(a.recommended)), "price")
-        if a and not self.cfg.auto_price and a.suspicious(draft["price"]) and body.get("low_price_ok") is not True:
-            # «485 000 for 9 months» is almost surely the monthly price: the seller confirms it first.
-            raise ApiError(400, "price_suspicious", ctx.t(
-                "app.err.price_suspicious", price=fmt_money(draft["price"]), month=fmt_money(a.month_cost(draft["price"])),
-                fit_month=fmt_money(a.fit_month)), "price")
+        # The seller's own price is taken as it is: no suggested price, no limits against 1Fit.
 
         # Up to 3 screenshots: {file_id, sig} for a new upload, "keep" for the ones already on the listing.
         shots = body.get("screenshots")

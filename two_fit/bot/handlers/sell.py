@@ -39,7 +39,6 @@ from ..middlewares import Btn
 from ..notify import Notifier
 from ..payments import send_fee_invoice
 from ..ui import (
-    advice_text,
     btn,
     contacts_block,
     esc,
@@ -200,7 +199,7 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
                 "sell.ask_price_installment", monthly=fmt_money(d["monthly_payment"]), left=d["payments_left"])
         else:
             text = prompt(ctx, data, step)
-        await message.answer(text + _advice_part(ctx, d), reply_markup=_nav(ctx, step, _advice_rows(ctx, d)))
+        await message.answer(text, reply_markup=_nav(ctx, step))  # the seller's own price: no suggestion
     elif step == "desc":
         skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
@@ -220,19 +219,6 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, extra))
     elif step == "phone":
         await message.answer(ctx.t("sell.ask_phone"), reply_markup=phone_kb(ctx))
-
-
-def _advice_part(ctx: Ctx, draft: dict) -> str:
-    a = price_advice(ctx, draft)
-    return "\n\n" + advice_text(ctx, a) if a else ""
-
-
-def _advice_rows(ctx: Ctx, draft: dict) -> list:
-    """One tap to take the recommended price."""
-    a = price_advice(ctx, draft)
-    if not a:
-        return []
-    return [[btn(ctx.t("advice.use_btn", price=fmt_money(a.recommended)), SellCb(action="advice", value=str(a.recommended)))]]
 
 
 async def advance(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
@@ -614,62 +600,11 @@ async def on_price(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await _set_price(message, state, ctx, price)
 
 
-@router.callback_query(SellForm.price, SellCb.filter(F.action == "advice"))
-async def on_price_advice(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
-    """«✅ Set 4 530 000» under the price question: take the recommended price."""
-    a = price_advice(ctx, (await state.get_data()).get("draft") or {})
-    if not a or callback_data.value != str(a.recommended):
-        await call.answer(ctx.t("common.stale"), show_alert=True)
-        return
-    await call.answer()
-    await call.message.edit_reply_markup(reply_markup=None)
-    await _set_price(call.message, state, ctx, a.recommended)
-
-
-async def _set_price(message: Message, state: FSMContext, ctx: Ctx, price: int, confirmed: bool = False) -> None:
-    data = await state.get_data()
-    draft = data.get("draft") or {}
-    a = price_advice(ctx, draft)
-    if a and a.suspicious(price) and not confirmed:
-        # «485 000 for 9 months» is almost surely the monthly price: ask before it reaches the catalog.
-        await state.update_data(low_price=price)
-        await message.answer(
-            ctx.t("sell.price_suspicious", price=fmt_money(price), left=left_text(ctx, draft["end_date"]),
-                  month=fmt_money(a.month_cost(price)), fit_month=fmt_money(a.fit_month),
-                  recommended=fmt_money(a.recommended)),
-            reply_markup=kb([btn(ctx.t("sell.price_low_ok"), SellCb(action="lowok", value=str(price)))],
-                            [btn(ctx.t("sell.price_low_no"), SellCb(action="lowno"))]))
-        return
-    if a and a.too_high(price):
-        # Nobody buys it dearer than 1Fit sells a new one in installments.
-        await message.answer(ctx.t("err.price_too_high", max=fmt_money(a.max_price), price=fmt_money(a.recommended)),
-                             reply_markup=_nav(ctx, "price", _advice_rows(ctx, draft)))
-        return
+async def _set_price(message: Message, state: FSMContext, ctx: Ctx, price: int) -> None:
+    """Whatever the seller asks: no suggested price, no limits against 1Fit."""
     await draft_update(state, price=price)
-    text = ctx.t("sell.price_set", price=fmt_money(price))
-    if a and a.too_low(price):
-        text += "\n\n" + ctx.t("advice.too_low", price=fmt_money(a.recommended))
-    await message.answer(text)
+    await message.answer(ctx.t("sell.price_set", price=fmt_money(price)))
     await advance(message, state, ctx, "price")
-
-
-@router.callback_query(SellForm.price, SellCb.filter(F.action == "lowok"))
-async def on_low_price_ok(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
-    """The seller confirms that the very low price is for the whole term."""
-    price = (await state.get_data()).get("low_price")
-    if not price or callback_data.value != str(price):
-        await call.answer(ctx.t("common.stale"), show_alert=True)
-        return
-    await call.answer()
-    await call.message.edit_reply_markup(reply_markup=None)
-    await _set_price(call.message, state, ctx, price, confirmed=True)
-
-
-@router.callback_query(SellForm.price, SellCb.filter(F.action == "lowno"))
-async def on_low_price_no(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
-    await call.answer()
-    await call.message.edit_reply_markup(reply_markup=None)
-    await ask(call.message, state, ctx, "price")
 
 
 @router.callback_query(SellForm.plan, SellCb.filter(F.action == "plan"))
@@ -947,15 +882,6 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
         await call.message.edit_reply_markup(reply_markup=None)
         await state.update_data(single=True)
         await ask(call.message, state, ctx, "payment")
-        return
-    a = None if installment_price(draft) else price_advice(ctx, draft)
-    if a and a.too_high(draft["price"]):
-        # The end date or the installments changed after the price was set: the price is now above the limit.
-        await call.answer()
-        await call.message.edit_reply_markup(reply_markup=None)
-        await call.message.answer(ctx.t("err.price_too_high", max=fmt_money(a.max_price), price=fmt_money(a.recommended)))
-        await state.update_data(single=True)
-        await ask(call.message, state, ctx, "price")
         return
     # An automatic price keeps following the days left after listing (Repo.reprice, every day).
     draft["price_auto"] = bool(data.get("auto_price")) and draft.get("kind") != LK.PROMO

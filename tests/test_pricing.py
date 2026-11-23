@@ -7,7 +7,7 @@ from two_fit.price_watch import PENDING_KEY, PriceError, PriceWatcher, next_run,
 from two_fit.pricing import DEFAULT_FIT_PRICES, advise
 from two_fit.repo import TZ, Repo, today_local
 
-from .harness import Harness, alerts, texts
+from .harness import Harness, buttons_of, alerts, texts
 from .test_webapp import Api, api, draft  # noqa: F401 — fixtures shared with the Mini App tests
 
 SELLER, ADMIN = 1, 900
@@ -92,28 +92,19 @@ async def walk_to_price(h, days=200):
     return await h.click(SELLER, "sl:freeze:no")
 
 
-async def test_bot_shows_and_applies_the_recommended_price(h):
-    a = advise((today_local() + timedelta(days=200)).isoformat(), today_local())
+async def test_bot_asks_the_price_without_suggesting_one(h):
     ask = texts(await walk_to_price(h))
-    assert "Рекомендуемая цена" in ask and "Покупатель заплатит за" in ask and "1Fit" in ask
-    cb = h.button(SELLER, "Поставить")
-    assert cb == f"sl:advice:{a.recommended}"
-    calc = texts(await h.click(SELLER, cb))
-    assert "Цена: <b>" in calc
-    data = await h.dp.storage.get_data(key=_key(h))
-    assert data["draft"]["price"] == a.recommended
+    assert "Рекомендуемая цена" not in ask and "1Fit" not in ask
+    assert not [b for c in h.to(SELLER)[-1:] for b in buttons_of(c) if "Поставить" in b.text]
 
 
-async def test_bot_refuses_a_price_dearer_than_1fit(h):
+async def test_bot_takes_any_price_the_seller_sets(h):
+    """No limits against 1Fit: dearer than 1Fit or very low, the seller's price goes as it is."""
     await walk_to_price(h)
-    refused = texts(await h.send(SELLER, "6 000 000"))
-    assert "не купят" in refused
+    high = texts(await h.send(SELLER, "60 000 000"))
+    assert "Цена: <b>60\xa0000\xa0000 сум" in high and "не купят" not in high
     data = await h.dp.storage.get_data(key=_key(h))
-    assert "price" not in data["draft"]
-    low = texts(await h.send(SELLER, "500 000"))  # 500 000 for 200 days: most likely the monthly price
-    assert "Проверьте цену" in low and "один месяц" in low
-    ok = texts(await h.click(SELLER, "sl:lowok:500000"))  # the seller confirms: allowed, with a warning
-    assert "намного дешевле" in ok
+    assert data["draft"]["price"] == 60_000_000
 
 
 async def test_card_shows_the_whole_price_without_the_1fit_comparison(h):
@@ -144,8 +135,9 @@ async def test_api_advice_and_limit(h, api):  # noqa: F811
     _, none = await api.call("POST", "/api/advice", SELLER, {"end_date": "", "paid_in_full": True})
     assert none["advice"] is None
 
-    status, err = await api.call("POST", "/api/listings", SELLER, draft(price="6 000 000", accepted_price=6_000_000))
-    assert (status, err["error"], err["field"]) == (400, "price_too_high", "price")
+    # the seller's own price goes as it is, even dearer than 1Fit
+    status, dear = await api.call("POST", "/api/listings", SELLER, draft(price="60 000 000"))
+    assert status == 201 and (await h.repo.get_listing(dear["id"]))["price"] == 60_000_000
 
     status, made = await api.call("POST", "/api/listings", SELLER, draft())
     assert status == 201
@@ -273,7 +265,7 @@ def test_end_date_must_fit_the_tariff():
         check_plan_end(TODAY + timedelta(days=300), TODAY, 180)  # 10 months left on a 6-month tariff
 
 
-async def test_api_needs_a_tariff_and_asks_about_a_suspicious_price(h, api):  # noqa: F811
+async def test_api_needs_a_tariff_and_takes_a_low_price(h, api):  # noqa: F811
     status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=None))
     assert (status, err["field"]) == (400, "tariff_days")
     # 6 months cannot be re-registered in 1Fit: only 12 or 24
@@ -285,10 +277,8 @@ async def test_api_needs_a_tariff_and_asks_about_a_suspicious_price(h, api):  # 
         today_local() + timedelta(days=500)).isoformat()))
     assert (status, err["error"], err["field"]) == (400, "bad_end_for_plan", "end_date")
 
-    low = dict(price="485 000", accepted_price=485_000)
-    status, err = await api.call("POST", "/api/listings", SELLER, draft(**low))
-    assert (status, err["error"], err["field"]) == (400, "price_suspicious", "price") and "один месяц" in err["message"]
-    status, made = await api.call("POST", "/api/listings", SELLER, draft(**low, low_price_ok=True))
+    # a very low price is not questioned either
+    status, made = await api.call("POST", "/api/listings", SELLER, draft(price="485 000"))
     assert status == 201
     await h.repo.approve(made["id"], ADMIN)
     _, cat = await api.call("GET", "/api/catalog", SELLER)

@@ -735,6 +735,7 @@ function sellForm(d, onDone, onKind) {
   const adviceCard = h("div", { class: "card advice", hidden: true });
   const priceWarn = h("div", { class: "callout bad", hidden: true });  // inside the price card
   const drawAdviceCheck = () => {
+    if (!autoPrice()) { priceWarn.hidden = true; return; }  // the seller's own price: no limits, no hints
     const p = Number(d.price);
     let text = "";
     if (advice && p && advice.max && p > advice.max) text = T("app.advice.max", { max: money(advice.max) });
@@ -767,7 +768,7 @@ function sellForm(d, onDone, onKind) {
       drawAuto();
       return;
     }
-    const show = d.kind === "membership" && advice && !isInst();
+    const show = false;  // no suggested price: the seller sets their own
     adviceCard.hidden = !show;
     if (!show) { drawAdviceCheck(); return; }
     const use = h("button", { class: "btn small", type: "button", onclick: () => { setPrice(String(advice.recommended)); haptic("success"); } },
@@ -785,7 +786,7 @@ function sellForm(d, onDone, onKind) {
   const loadAdvice = () => {
     clearTimeout(adviceTimer);
     adviceTimer = setTimeout(async () => {
-      if (d.kind !== "membership" || !d.end_date || d.paid == null || (autoPrice() && !d.plan)) { advice = null; drawAdvice(); return; }
+      if (!autoPrice() || !d.end_date || !d.plan) { advice = null; drawAdvice(); return; }
       const req = ++adviceReq;
       try {
         const res = await api("POST", "advice", { end_date: d.end_date, paid_in_full: d.paid, tariff_days: d.plan,
@@ -943,15 +944,7 @@ function sellForm(d, onDone, onKind) {
                    description: d.description, name: d.name, phone: d.phone, screenshots: d.shots };
     const send = () => (d.id ? api("PUT", "listings/" + d.id, body) : api("POST", "listings", body));
     try {
-      let res;
-      try {
-        res = await send();
-      } catch (err) {
-        // «485 000 for 9 months»: the server asks whether that is really the price of the whole term.
-        if (err.code !== "price_suspicious" || !(await ask(err.message))) throw err;
-        body.low_price_ok = true;
-        res = await send();
-      }
+      const res = await send();
       B.user = Object.assign({}, B.user, { name: (d.name || "").trim(), phone: (d.phone || "").trim() });
       // Saved; an unpaid one goes to moderation once Telegram takes the fee.
       const paid = "invoice_url" in res ? await payInvoice(res.invoice_url) : null;
