@@ -239,15 +239,15 @@ async def test_catalog_newest_first_and_city_filter(repo):
     assert dict(await repo.catalog_cities()) == {"tashkent": 1, "samarkand": 1}
 
 
-async def test_catalog_orders_by_the_sellers_price(repo):
-    # the installments are not added: 580 000 is cheaper than 2 000 000
+async def test_catalog_orders_installments_by_their_total(repo):
+    # an installment is shown as 533 333 × 9 = 4 799 997: dearer than 2 000 000
     a = await repo.create_listing(1, "ru", draft(price=580_000, paid_in_full=False, monthly_payment=533_333,
                                                  payments_left=9, commission_accepted_price=580_000))
     b = await repo.create_listing(1, "ru", draft(price=2_000_000))
     await repo.approve(a, 99)
     await repo.approve(b, 99)
     rows, _ = await repo.catalog(None, 10, 0)
-    assert [r["id"] for r in rows] == [a, b]
+    assert [r["id"] for r in rows] == [b, a]
 
 
 async def test_edit_goes_back_to_moderation(repo):
@@ -417,3 +417,16 @@ async def test_old_installment_listings_get_the_total_price(tmp_path):
         assert (await r.get_listing(lid))["price"] == 6_127_000
     finally:
         await r.close()
+
+
+async def test_catalog_is_ordered_by_the_price_buyers_see(repo):
+    """An installment shows monthly × payments left: it is sorted by that, not by a price stored before."""
+    inst = await repo.create_listing(1, "ru", draft(price=2_000_000))
+    await repo.db.execute("UPDATE listings SET paid_in_full=0, monthly_payment=557000, payments_left=1, price=5800000 "
+                          "WHERE id=?", (inst,))  # shown as 557 000
+    full = await repo.create_listing(1, "ru", draft(price=750_000))
+    dear = await repo.create_listing(1, "ru", draft(price=3_710_000))
+    for i in (inst, full, dear):
+        await repo.approve(i, 99)
+    rows, _ = await repo.catalog(None, 10, 0)
+    assert [r["id"] for r in rows] == [inst, full, dear]

@@ -540,10 +540,11 @@ function catalogView(view, rev) {
   const more = c.items.length < c.total
     ? h("button", { class: "btn ghost", type: "button", onclick: (e) => busy(e.currentTarget, async () => { await fetchCatalog(false); render(); }) }, T("app.catalog.more"))
     : null;
-  // Sorted cheapest first. «Cheapest» compares memberships only: a promo code is a different thing
+  // «Cheapest»: the lowest price shown among the memberships loaded. A promo code is a different thing
   // and is naturally cheaper, so flagging it would mislead.
-  const memberships = c.items.filter((l) => !isPromo(l) && !suspicious(l));
-  const best = memberships.length > 1 ? memberships[0] : null;
+  const memberships = c.items.filter((l) => !isPromo(l));
+  const best = memberships.length > 1
+    ? memberships.reduce((a, b) => (buyerTotal(b) < buyerTotal(a) ? b : a)) : null;
   const rows = c.items.map((l) => {
     const row = listingRow(l, () => go({ name: "listing", id: l.id }));
     const flags = [l === best ? cheapestFlag() : null].filter(Boolean);

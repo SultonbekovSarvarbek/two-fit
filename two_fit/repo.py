@@ -203,6 +203,11 @@ CREATE TABLE IF NOT EXISTS fit_price_checks (
 """
 
 
+# The price buyers see, in SQL (the same rule as ui.buyer_total and the Mini App's price_total).
+SHOWN_PRICE = ("CASE WHEN paid_in_full = 0 AND monthly_payment > 0 AND payments_left > 0"
+               " THEN monthly_payment * payments_left ELSE price END")
+
+
 def _row(row: aiosqlite.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
@@ -602,8 +607,9 @@ class Repo:
             params["city"] = city
         total = await self._scalar(f"SELECT COUNT(*) FROM listings WHERE {where}", params)
         rows = await self._all(
-            # cheapest first, by the price the seller set
-            f"SELECT * FROM listings WHERE {where} ORDER BY price ASC, published_at DESC, id DESC LIMIT :lim OFFSET :off",
+            # cheapest first, by the price buyers see: installments cost monthly × payments left
+            f"SELECT * FROM listings WHERE {where} ORDER BY {SHOWN_PRICE} ASC, published_at DESC, id DESC"
+            " LIMIT :lim OFFSET :off",
             {**params, "lim": limit, "off": offset},
         )
         return rows, total
