@@ -398,3 +398,22 @@ def test_default_membership_rate_is_15(monkeypatch):
     monkeypatch.delenv("COMMISSION_PERCENT", raising=False)
     monkeypatch.setattr("two_fit.config.load_dotenv", lambda *a, **k: None)
     assert load_config().commission_percent == 15
+
+
+async def test_old_installment_listings_get_the_total_price(tmp_path):
+    """Listed before the rule: 5 800 000 typed + 11 × 557 000 to 1Fit becomes 6 127 000, once, on start."""
+    path = tmp_path / "inst.db"
+    r = Repo(path, 10)
+    await r.connect()
+    await r.touch_user(1, "u1", "U1")
+    lid = await r.create_listing(1, "ru", draft(price=2_000_000))
+    await r.db.execute("UPDATE listings SET paid_in_full=0, monthly_payment=557000, payments_left=11, price=5800000 "
+                       "WHERE id=?", (lid,))
+    await r.db.execute("DELETE FROM settings WHERE key='installment_price_v1'")  # as before the update
+    await r.close()
+    r = Repo(path, 10)
+    await r.connect()
+    try:
+        assert (await r.get_listing(lid))["price"] == 6_127_000
+    finally:
+        await r.close()

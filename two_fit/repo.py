@@ -266,6 +266,14 @@ class Repo:
         for column in ("fee_paid_at", "fee_charge_id"):
             if column not in columns:
                 await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} TEXT")
+        # Installment memberships cost monthly × payments left. Listings made before that rule get it once,
+        # so the price, the catalog order and the nightly countdown agree (sold ones keep their history).
+        if not await self._scalar("SELECT 1 FROM settings WHERE key='installment_price_v1'"):
+            await self.db.execute(
+                "UPDATE listings SET price = monthly_payment * payments_left WHERE kind='membership' AND paid_in_full=0"
+                " AND monthly_payment > 0 AND payments_left > 0 AND status NOT IN ('sold', 'reserved')")
+            await self.db.execute("INSERT INTO settings(key, value, updated_at) VALUES ('installment_price_v1', 'true', ?)",
+                                  (now_iso(),))
 
     async def close(self) -> None:
         if self._db is not None:

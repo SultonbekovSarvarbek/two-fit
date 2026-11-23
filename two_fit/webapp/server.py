@@ -99,7 +99,10 @@ def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> di
 
 
 def price_total(listing: dict[str, Any]) -> int:
-    """The price buyers see: exactly what the seller set — the installments are never added to it."""
+    """The price buyers see. Installments: the total left to pay, monthly × payments left (557 000 × 11);
+    otherwise exactly what the seller set."""
+    if listing["paid_in_full"] == 0 and listing["monthly_payment"] and listing["payments_left"]:
+        return listing["monthly_payment"] * listing["payments_left"]
     return listing["price"]
 
 

@@ -179,7 +179,11 @@ def advice_text(ctx: Ctx, a: Advice) -> str:
 
 
 def buyer_total(data: dict[str, Any]) -> int:
-    """The price buyers see: exactly what the seller set — the installments are never added to it."""
+    """The price buyers see. Installments: the total left to pay, monthly × payments left (557 000 × 11);
+    otherwise exactly what the seller set."""
+    paid = data.get("paid_in_full")
+    if paid is not None and not paid and data.get("monthly_payment") and data.get("payments_left"):
+        return data["monthly_payment"] * data["payments_left"]
     return data.get("price") or 0
 
 
