@@ -695,6 +695,10 @@ function sellForm(d, onDone, onKind) {
   freeze.addEventListener("change", () => { d.freeze = freeze.checked; drawFreeze(); });
   const monthly = digitsInput("monthly", 9, "500 000");
   const left = digitsInput("left", 2, "9");
+  // What the buyer still pays 1Fit, and the whole sum they see as the price (rounded like the server does).
+  const installmentsTotal = () => (d.kind === "membership" && d.paid === false ? Number(d.monthly) * Number(d.left) || 0 : 0);
+  const buyerSum = () => { const inst = installmentsTotal(), p = Number(d.price) || 0; return inst ? Math.round((p + inst) / 1000) * 1000 : p; };
+  [monthly, left].forEach((el) => el.addEventListener("input", () => drawTotal()));
   monthly.addEventListener("input", () => loadAdvice());
   left.addEventListener("input", () => { d.leftTyped = true; loadAdvice(); });
   // Usually one payment per month until the end date: filled in, the seller only corrects it.
@@ -722,7 +726,15 @@ function sellForm(d, onDone, onKind) {
   let advice = null, adviceReq = 0, adviceTimer;
   const adviceCard = h("div", { class: "card advice", hidden: true });
   const priceWarn = h("div", { class: "callout bad", hidden: true });  // inside the price card
+  // With installments buyers see the whole sum, not the price typed here: say so right under the field.
+  const totalLine = h("div", { class: "callout", hidden: true });
+  const drawTotal = () => {
+    const inst = installmentsTotal(), p = Number(d.price);
+    totalLine.hidden = !(inst && p);
+    if (!totalLine.hidden) totalLine.textContent = "👀 " + T("app.sell.buyer_sees", { total: money(buyerSum()), price: money(p), inst: money(inst) });
+  };
   const drawAdviceCheck = () => {
+    drawTotal();
     const p = Number(d.price);
     let text = "";
     if (advice && p && advice.max && p > advice.max) text = T("app.advice.max", { max: money(advice.max) });
@@ -877,6 +889,7 @@ function sellForm(d, onDone, onKind) {
     if (d.paid === false) guessLeft();
     priceHint.textContent = T(d.kind === "promo" ? "app.sell.price_hint_promo"
       : d.paid === false ? "app.sell.price_hint_installment" : "app.sell.price_hint");
+    drawTotal();
   };
   const drawKind = () => {
     const promo = d.kind === "promo";
@@ -903,7 +916,11 @@ function sellForm(d, onDone, onKind) {
       membership ? ["❄️ " + T("app.f.freeze_short"), d.freeze ? T("app.freeze_row", { days: d.freezeDays }) : T("app.confirm.none")] : null,
       membership ? [T("app.f.pay_short"), d.paid === false
         ? T("app.pay.installment_row", { monthly: money(d.monthly), left: d.left }) : T("app.pay.full_row")] : null,
-      [T("app.f.price"), money(p) + " " + T("app.sum") + (d.negotiable ? " · " + T("app.negotiable") : ""), true],
+      installmentsTotal()
+        ? [T("app.sell.to_you"), money(p) + " " + T("app.sum")]
+        : [T("app.f.price"), money(p) + " " + T("app.sum") + (d.negotiable ? " · " + T("app.negotiable") : ""), true],
+      installmentsTotal()  // what buyers see as the price: the whole sum, the installments included
+        ? ["👀 " + T("app.sell.buyer_price"), money(buyerSum()) + " " + T("app.sum") + (d.negotiable ? " · " + T("app.negotiable") : ""), true] : null,
       ["📢 " + T("app.my.contacts"), [d.name, d.phone, B.user.username ? "@" + B.user.username : null].filter(Boolean).join(", ")],
       ["🔒 " + T("app.confirm.shots"), String(shotCount())],
       d.fee ? ["💳 " + T("app.sell.pay_label"), money(d.fee) + " " + T("app.sum"), true] : null,
@@ -954,7 +971,7 @@ function sellForm(d, onDone, onKind) {
     payCard,
     freezeCard,
     adviceCard,
-    h("div", { class: "card" }, fields.price, priceWarn, negotiableRow),
+    h("div", { class: "card" }, fields.price, totalLine, priceWarn, negotiableRow),
     h("div", { class: "card" }, fields.description),
     h("h2", null, T("app.sell.contacts")),
     h("div", { class: "card" }, fields.name, fields.phone),
