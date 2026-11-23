@@ -513,8 +513,5 @@
   "sell.instagram": "📸 Илтимос, Instagram саҳифамизга обуна бўлинг — у ерда 2FIT янгиликлари ва янги абонементлар. Раҳмат!",
   "sell.instagram_btn": "📸 2FIT Instagram'ига обуна бўлиш",
   "app.sell.instagram": "Илтимос, Instagram саҳифамизга обуна бўлинг — у ерда 2FIT янгиликлари ва янги абонементлар.",
-  "app.sell.instagram_btn": "Instagram'га обуна бўлиш",
-  "app.sell.buyer_sees": "Харидорлар {total} сўм нархни кўради: ҳозир сизга {price} сўм + 1Fit нинг қолган тўловлари {inst} сўм.",
-  "app.sell.to_you": "Ҳозир сизга",
-  "app.sell.buyer_price": "Харидорлар учун нарх"
+  "app.sell.instagram_btn": "Instagram'га обуна бўлиш"
 }

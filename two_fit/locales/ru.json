@@ -513,8 +513,5 @@
   "sell.instagram": "📸 Подпишитесь, пожалуйста, на наш Instagram — там новости 2FIT и свежие абонементы. Спасибо!",
   "sell.instagram_btn": "📸 Подписаться на Instagram 2FIT",
   "app.sell.instagram": "Подпишитесь, пожалуйста, на наш Instagram — там новости 2FIT и свежие абонементы.",
-  "app.sell.instagram_btn": "Подписаться на Instagram",
-  "app.sell.buyer_sees": "Покупатели увидят цену {total} сум: {price} сум вам сейчас + {inst} сум оставшихся платежей 1Fit.",
-  "app.sell.to_you": "Вам сейчас",
-  "app.sell.buyer_price": "Цена для покупателей"
+  "app.sell.instagram_btn": "Подписаться на Instagram"
 }
