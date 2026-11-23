@@ -179,12 +179,8 @@ def advice_text(ctx: Ctx, a: Advice) -> str:
 
 
 def buyer_total(data: dict[str, Any]) -> int:
-    """The price plus the installments the buyer still pays 1Fit: «580 000» with 9 × 533 333 due is 5 380 000."""
-    price = data.get("price") or 0
-    if data.get("paid_in_full") is not None and not data["paid_in_full"] and data.get("monthly_payment") \
-            and data.get("payments_left"):
-        return round_k(price + data["monthly_payment"] * data["payments_left"])  # 5 379 997 -> 5 380 000
-    return price
+    """The price buyers see: exactly what the seller set — the installments are never added to it."""
+    return data.get("price") or 0
 
 
 def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:

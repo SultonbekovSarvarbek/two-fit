@@ -99,9 +99,7 @@ def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> di
 
 
 def price_total(listing: dict[str, Any]) -> int:
-    """«580 000» with 9 × 533 333 still due to 1Fit: 5 380 000 (rounded to a thousand when there are installments)."""
-    if listing["paid_in_full"] == 0 and listing["monthly_payment"] and listing["payments_left"]:
-        return round_k(listing["price"] + listing["monthly_payment"] * listing["payments_left"])
+    """The price buyers see: exactly what the seller set — the installments are never added to it."""
     return listing["price"]
 
 

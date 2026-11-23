@@ -594,10 +594,8 @@ class Repo:
             params["city"] = city
         total = await self._scalar(f"SELECT COUNT(*) FROM listings WHERE {where}", params)
         rows = await self._all(
-            # by the whole sum the buyer pays: «580 000» with 9 × 533 333 still due to 1Fit is 5 380 000
-            f"SELECT * FROM listings WHERE {where} ORDER BY price + CASE WHEN paid_in_full = 0"
-            " THEN COALESCE(monthly_payment * payments_left, 0) ELSE 0 END ASC,"
-            " published_at DESC, id DESC LIMIT :lim OFFSET :off",
+            # cheapest first, by the price the seller set
+            f"SELECT * FROM listings WHERE {where} ORDER BY price ASC, published_at DESC, id DESC LIMIT :lim OFFSET :off",
             {**params, "lim": limit, "off": offset},
         )
         return rows, total

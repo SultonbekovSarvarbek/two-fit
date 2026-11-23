@@ -239,15 +239,15 @@ async def test_catalog_newest_first_and_city_filter(repo):
     assert dict(await repo.catalog_cities()) == {"tashkent": 1, "samarkand": 1}
 
 
-async def test_catalog_counts_installments_in_the_order(repo):
-    # 580 000 now + 9 × 533 333 to 1Fit is 5 380 000 for the buyer: dearer than 2 000 000 paid in full
+async def test_catalog_orders_by_the_sellers_price(repo):
+    # the installments are not added: 580 000 is cheaper than 2 000 000
     a = await repo.create_listing(1, "ru", draft(price=580_000, paid_in_full=False, monthly_payment=533_333,
                                                  payments_left=9, commission_accepted_price=580_000))
     b = await repo.create_listing(1, "ru", draft(price=2_000_000))
     await repo.approve(a, 99)
     await repo.approve(b, 99)
     rows, _ = await repo.catalog(None, 10, 0)
-    assert [r["id"] for r in rows] == [b, a]
+    assert [r["id"] for r in rows] == [a, b]
 
 
 async def test_edit_goes_back_to_moderation(repo):

@@ -373,10 +373,10 @@ async def test_installment_is_asked_and_shown(h, api):
 
     full = await publish(h, api)
     inst = await publish(h, api, paid_in_full=False, monthly_payment=500_000, payments_left="9")
-    # a buyer sees only the whole sum: 2 000 000 now + 9 × 500 000 to 1Fit, never the installments themselves
+    # a buyer sees exactly the seller's price: the installments are not added, nor shown
     _, card = await api.call("GET", f"/api/listings/{inst}", BUYER)
     l = card["listing"]
-    assert l["price_total"] == 6_500_000 and not {"paid_in_full", "monthly_payment", "payments_left"} & set(l)
+    assert l["price_total"] == l["price"] == 2_000_000 and not {"paid_in_full", "monthly_payment", "payments_left"} & set(l)
     _, card = await api.call("GET", f"/api/listings/{full}", BUYER)
     assert card["listing"]["price_total"] == card["listing"]["price"]
     # the seller still sees and edits their own answers

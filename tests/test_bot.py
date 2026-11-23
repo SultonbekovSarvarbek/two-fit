@@ -328,9 +328,9 @@ async def test_installment_wizard_and_card(h):
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
     preview = texts(await h.send(SELLER, contact="+998901112233"))
-    # the price shown is the whole sum: 300 000 now + 9 × 500 000 to 1Fit
-    assert "💰 Цена: <b>4\xa0800\xa0000 сум</b>" in preview
-    assert "Рассрочка" not in preview  # buyers never see the installments, only the whole sum
+    # buyers see exactly the price the seller set: the installments are not added to it
+    assert "💰 Цена: <b>300\xa0000 сум</b>" in preview and "4\xa0800\xa0000" not in preview
+    assert "Рассрочка" not in preview
     assert "❄️ Заморозка: осталось 20 дн." in preview
     await h.click(SELLER, "sl:send:")
     listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
