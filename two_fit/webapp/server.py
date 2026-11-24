@@ -23,10 +23,11 @@ from aiohttp import web
 from ..bot.callbacks import AdmCb
 from ..bot.context import Ctx
 from ..bot.notify import Notifier
-from ..bot.payments import fee_invoice_link
+from ..bot.payments import announce_paid, announce_refunded, fee_invoice_link
 from ..bot.ui import btn, kb, price_advice
 from ..config import Config
 from .. import ocr
+from ..payme import Payme
 from ..money import round_k
 from ..ocr import MAX_SCREENSHOTS
 from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
@@ -142,7 +143,7 @@ def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
         "reject_reason": listing["reject_reason"] if status == LS.REJECTED else None,
         "fee": listing["fee_amount"] or 0,
         "fee_due": Repo.fee_due(listing),  # an edit sends it back unpaid until it is paid
-        "can_pay": unpaid and bool(ctx.cfg.payment_token),
+        "can_pay": unpaid and ctx.cfg.payments_on,
         "seller_name": listing["seller_name"],
         "seller_phone": listing["seller_phone"],
         "has_screenshot": bool(listing["screenshot_file_id"]),
@@ -159,6 +160,12 @@ class WebApp:
         self.ocr_on = ocr.available()  # Tesseract installed? Without it screenshots are only looked at by the admin
         if not self.ocr_on:
             log.info("Tesseract is not installed: screenshots are not read automatically")
+        system = Ctx(repo, i18n, cfg, {"id": 0, "lang": "ru"})  # notifications go out in each one's language
+        self.payme = Payme(
+            repo, cfg, receipt_title=lambda lid: f'{i18n.t("ru", "pay.label")} №{lid}',
+            on_paid=lambda listing, first, amount: announce_paid(notifier, system, listing, first, amount),
+            on_refunded=lambda listing, amount: announce_refunded(notifier, system, listing, amount),
+        )
 
     # ------------------------------------------------------------------ plumbing
     def build(self) -> web.Application:
@@ -177,6 +184,8 @@ class WebApp:
         r.add_post(r"/api/listings/{id:\d+}/invoice", self.invoice)
         r.add_post(r"/api/listings/{id:\d+}/withdraw", self.withdraw)
         r.add_post(r"/api/listings/{id:\d+}/sold", self.sold)
+        if self.cfg.payme_enabled:
+            r.add_post("/payme", self.payme_rpc)  # Payme's own Basic auth, not initData
         return app
 
     @web.middleware
@@ -250,6 +259,11 @@ class WebApp:
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
         })
+
+    async def payme_rpc(self, request: web.Request) -> web.Response:
+        """Payme Merchant API. Always HTTP 200 with a JSON-RPC result or error, as Payme expects."""
+        answer = await self.payme.handle(await request.read(), request.headers.get("Authorization"))
+        return web.json_response(answer)
 
     # ------------------------------------------------------------------ profile
     def _bootstrap(self, ctx: Ctx) -> dict[str, Any]:
@@ -547,7 +561,7 @@ class WebApp:
         listing_id = int(request.match_info["id"])
         listing = await self._own(ctx, listing_id)
         problem = await self.repo.fee_problem(listing_id, ctx.user_id)
-        if problem or not self.cfg.payment_token:
+        if problem or not self.cfg.payments_on:
             raise ApiError(409, problem or "off", ctx.t(f"pay.err.{problem or 'off'}"))
         url = await self._invoice_url(ctx, listing)
         if not url:
@@ -614,5 +628,6 @@ async def start_webapp(repo: Repo, i18n: I18n, cfg: Config, bot: Bot, notifier: 
     runner = web.AppRunner(create_webapp(repo, i18n, cfg, bot, notifier), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, cfg.webapp_host, cfg.webapp_port).start()
-    log.info("Mini App is served on %s:%s for %s", cfg.webapp_host, cfg.webapp_port, cfg.webapp_url)
+    log.info("web server on %s:%s (Mini App: %s, Payme: %s)", cfg.webapp_host, cfg.webapp_port,
+             cfg.webapp_url or "off", "POST /payme" if cfg.payme_enabled else "off")
     return runner

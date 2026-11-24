@@ -125,8 +125,25 @@ CREATE TABLE IF NOT EXISTS fee_payments (
     currency            TEXT NOT NULL,
     charge_id           TEXT NOT NULL UNIQUE,      -- telegram_payment_charge_id: never counted twice
     provider_charge_id  TEXT,
-    paid_at             TEXT NOT NULL
+    paid_at             TEXT NOT NULL,
+    refunded_at         TEXT                       -- Payme cancelled a performed payment (money returned)
 );
+
+-- Payme Merchant API: one row per Payme transaction. Times are Unix milliseconds, as Payme sends them.
+CREATE TABLE IF NOT EXISTS payme_transactions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,  -- ours: «transaction» in the answers to Payme
+    payme_id      TEXT NOT NULL UNIQUE,
+    listing_id    INTEGER NOT NULL,
+    amount        INTEGER NOT NULL,                   -- tiyin
+    payme_time    INTEGER NOT NULL,                   -- when Payme made it (GetStatement filters by it)
+    create_time   INTEGER NOT NULL,
+    perform_time  INTEGER NOT NULL DEFAULT 0,
+    cancel_time   INTEGER NOT NULL DEFAULT 0,
+    state         INTEGER NOT NULL,                   -- 1 created, 2 performed, -1 cancelled, -2 cancelled after perform
+    reason        INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_payme_listing ON payme_transactions(listing_id, state);
+CREATE INDEX IF NOT EXISTS ix_payme_time ON payme_transactions(payme_time);
 
 CREATE TABLE IF NOT EXISTS purchase_requests (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -268,6 +285,10 @@ class Repo:
                 "UPDATE listings SET commission_percent = CASE kind WHEN 'promo' THEN 30 ELSE 10 END")
         if "fee_amount" not in columns:  # listings placed before the fee were free
             await self.db.execute("ALTER TABLE listings ADD COLUMN fee_amount INTEGER")
+        async with self.db.execute("PRAGMA table_info(fee_payments)") as cur:
+            fee_columns = {r[1] for r in await cur.fetchall()}
+        if "refunded_at" not in fee_columns:
+            await self.db.execute("ALTER TABLE fee_payments ADD COLUMN refunded_at TEXT")
         for column in ("fee_paid_at", "fee_charge_id"):
             if column not in columns:
                 await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} TEXT")
@@ -576,26 +597,70 @@ class Repo:
         async with self.tx():
             if await self._one("SELECT id FROM fee_payments WHERE charge_id=?", (charge_id,)):
                 return await self.get_listing(listing_id), False
-            listing = await self.get_listing(listing_id)
-            if not listing:
-                raise RepoError("not_found")
-            ts = now_iso()
+            return await self._record_fee(listing_id, user_id, amount, currency, charge_id, provider_charge_id)
+
+    async def _record_fee(self, listing_id: int, user_id: int, amount: int, currency: str, charge_id: str,
+                          provider_charge_id: str | None) -> tuple[dict[str, Any], bool]:
+        """Inside a transaction: the payment row, and the listing moves from unpaid to moderation."""
+        listing = await self.get_listing(listing_id)
+        if not listing:
+            raise RepoError("not_found")
+        ts = now_iso()
+        await self.db.execute(
+            """INSERT INTO fee_payments(listing_id, user_id, amount, currency, charge_id, provider_charge_id,
+                   paid_at) VALUES (?,?,?,?,?,?,?)""",
+            (listing_id, user_id, amount, currency, charge_id, provider_charge_id, ts),
+        )
+        first = not listing["fee_paid_at"]
+        if first:
             await self.db.execute(
-                """INSERT INTO fee_payments(listing_id, user_id, amount, currency, charge_id, provider_charge_id,
-                       paid_at) VALUES (?,?,?,?,?,?,?)""",
-                (listing_id, user_id, amount, currency, charge_id, provider_charge_id, ts),
+                "UPDATE listings SET fee_paid_at=?, fee_charge_id=?, updated_at=? WHERE id=?",
+                (ts, charge_id, ts, listing_id),
             )
-            first = not listing["fee_paid_at"]
-            if first:
-                await self.db.execute(
-                    "UPDATE listings SET fee_paid_at=?, fee_charge_id=?, updated_at=? WHERE id=?",
-                    (ts, charge_id, ts, listing_id),
-                )
-                await self.db.execute(
-                    "UPDATE listings SET status=? WHERE id=? AND status=?", (LS.PENDING, listing_id, LS.UNPAID)
-                )
-            await self._log(listing_id, user_id, "fee_paid", amount=amount, charge_id=charge_id, first=first)
-            return await self.get_listing(listing_id), first
+            await self.db.execute(
+                "UPDATE listings SET status=? WHERE id=? AND status=?", (LS.PENDING, listing_id, LS.UNPAID)
+            )
+        await self._log(listing_id, user_id, "fee_paid", amount=amount, charge_id=charge_id, first=first)
+        return await self.get_listing(listing_id), first
+
+    async def _refund_fee(self, listing_id: int, charge_id: str) -> dict[str, Any] | None:
+        """Inside a transaction: the payment was returned. If it was the one that paid the listing,
+        the listing owes the fee again and leaves moderation and the catalog until it is paid."""
+        ts = now_iso()
+        await self.db.execute("UPDATE fee_payments SET refunded_at=? WHERE charge_id=? AND refunded_at IS NULL",
+                              (ts, charge_id))
+        listing = await self.get_listing(listing_id)
+        if listing and listing["fee_charge_id"] == charge_id:
+            await self.db.execute("UPDATE listings SET fee_paid_at=NULL, fee_charge_id=NULL, updated_at=? WHERE id=?",
+                                  (ts, listing_id))
+            await self.db.execute("UPDATE listings SET status=?, published_at=NULL WHERE id=? AND status IN (?,?)",
+                                  (LS.UNPAID, listing_id, LS.PENDING, LS.APPROVED))
+        await self._log(listing_id, None, "fee_refunded", charge_id=charge_id)
+        return await self.get_listing(listing_id)
+
+    # ---------------------------------------------------------- Payme transactions
+    # Callers hold ``tx()``: Payme's calls for one listing must not interleave.
+    async def payme_get(self, payme_id: str) -> dict[str, Any] | None:
+        return await self._one("SELECT * FROM payme_transactions WHERE payme_id=?", (payme_id,))
+
+    async def payme_active(self, listing_id: int) -> list[dict[str, Any]]:
+        return await self._all("SELECT * FROM payme_transactions WHERE listing_id=? AND state=1", (listing_id,))
+
+    async def payme_insert(self, payme_id: str, listing_id: int, amount: int, payme_time: int,
+                           create_time: int) -> dict[str, Any]:
+        await self.db.execute(
+            """INSERT INTO payme_transactions(payme_id, listing_id, amount, payme_time, create_time, state)
+               VALUES (?,?,?,?,?,1)""", (payme_id, listing_id, amount, payme_time, create_time))
+        return await self.payme_get(payme_id)
+
+    async def payme_update(self, payme_id: str, **fields: Any) -> dict[str, Any]:
+        sets = ", ".join(f"{k}=?" for k in fields)
+        await self.db.execute(f"UPDATE payme_transactions SET {sets} WHERE payme_id=?", (*fields.values(), payme_id))
+        return await self.payme_get(payme_id)
+
+    async def payme_statement(self, start: int, end: int) -> list[dict[str, Any]]:
+        return await self._all(
+            "SELECT * FROM payme_transactions WHERE payme_time BETWEEN ? AND ? ORDER BY payme_time", (start, end))
 
     # ---------------------------------------------------------------- catalog
     async def catalog(self, city: str | None, limit: int, offset: int,
@@ -696,7 +761,7 @@ class Repo:
 
     async def stats(self, today: date | None = None) -> dict[str, int]:
         t = (today or today_local()).isoformat()
-        fees = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS total FROM fee_payments")
+        fees = await self._one("SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS total FROM fee_payments WHERE refunded_at IS NULL")
         return {
             "active": await self._scalar(
                 "SELECT COUNT(*) FROM listings WHERE status=? AND end_date>=?", (LS.APPROVED, t)

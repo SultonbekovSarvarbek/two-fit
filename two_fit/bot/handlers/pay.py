@@ -7,12 +7,12 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 
 from ...money import fmt_money
-from ...repo import LS, RepoError
-from ..callbacks import AdmCb, MyCb
+from ...repo import RepoError
+from ..callbacks import MyCb
 from ..context import Ctx
 from ..notify import Notifier
-from ..payments import CURRENCY, from_subunits, parse_payload, send_fee_invoice
-from ..ui import btn, kb, main_menu
+from ..payments import CURRENCY, announce_paid, from_subunits, parse_payload, send_fee_invoice
+from ..ui import main_menu
 
 log = logging.getLogger(__name__)
 
@@ -51,11 +51,7 @@ async def on_paid(message: Message, ctx: Ctx, notifier: Notifier) -> None:
         return  # the same payment reported again
     await message.answer(ctx.t("pay.done", id=listing_id, fee=fmt_money(from_subunits(sp.total_amount))),
                          reply_markup=main_menu(ctx))
-    key = "admin.n.new_listing" if listing["status"] == LS.PENDING else "admin.n.paid_not_pending"
-    await notifier.admins(ctx, lambda a: (
-        a.t(key, id=listing_id) + "\n" + a.t("admin.n.fee_paid", fee=fmt_money(from_subunits(sp.total_amount))),
-        kb([btn(a.t("admin.open_btn", id=listing_id), AdmCb(action="open", id=listing_id))]),
-    ))
+    await announce_paid(notifier, ctx, listing, first, from_subunits(sp.total_amount), tell_seller=False)
 
 
 @router.callback_query(MyCb.filter(F.action == "pay"))
@@ -63,7 +59,7 @@ async def on_pay_again(call: CallbackQuery, callback_data: MyCb, ctx: Ctx) -> No
     """«Pay» on an unpaid listing in «My listings»: a fresh invoice (the old one may be lost or expired)."""
     listing = await ctx.repo.get_listing(callback_data.id)
     problem = await ctx.repo.fee_problem(callback_data.id, ctx.user_id)
-    if problem or not ctx.cfg.payment_token:
+    if problem or not ctx.cfg.payments_on:
         await call.answer(ctx.t(f"pay.err.{problem or 'off'}"), show_alert=True)
         return
     await call.answer()

@@ -35,10 +35,28 @@ class Config:
     instagram_url: str = "https://www.instagram.com/2fit_uz/"  # sellers are asked to follow it; empty: not asked
     listing_fee: int = 30000  # сум
     payment_token: str = ""   # provider token from @BotFather → Payments
+    # Payme directly (Merchant API): Payme calls POST /payme on our server; fiscal receipts need the IKPU.
+    # Takes over from the Telegram invoice when the merchant id and the key are set.
+    payme_merchant_id: str = ""
+    payme_key: str = ""            # the cash desk key (test key in the sandbox); Payme may change it (ChangePassword)
+    payme_test: bool = False       # checkout.test.paycom.uz instead of checkout.paycom.uz
+    payme_account: str = "order_id"  # the account field set up in the Payme Business cash desk
+    payme_ikpu: str = ""           # МХИК / ИКПУ code of the service, for the fiscal receipt
+    payme_package_code: str = ""   # the package code tied to that IKPU (tasnif.soliq.uz)
+    payme_vat_percent: int = 0     # НДС %, 0 when the merchant does not pay VAT
+
+    @property
+    def payme_enabled(self) -> bool:
+        return bool(self.payme_merchant_id and self.payme_key)
+
+    @property
+    def payments_on(self) -> bool:
+        """Some way to take the fee is set up: Payme directly or a Telegram Payments provider."""
+        return self.payme_enabled or bool(self.payment_token)
 
     @property
     def fee_enabled(self) -> bool:
-        return self.listing_fee > 0 and bool(self.payment_token)
+        return self.listing_fee > 0 and self.payments_on
 
     @property
     def webapp_enabled(self) -> bool:
@@ -89,4 +107,11 @@ def load_config() -> Config:
         instagram_url=os.getenv("INSTAGRAM_URL", Config.instagram_url).strip(),
         listing_fee=int(os.getenv("LISTING_FEE", "30000") or 0),
         payment_token=os.getenv("PAYMENT_PROVIDER_TOKEN", "").strip(),
+        payme_merchant_id=os.getenv("PAYME_MERCHANT_ID", "").strip(),
+        payme_key=os.getenv("PAYME_KEY", "").strip(),
+        payme_test=os.getenv("PAYME_TEST", "").strip().lower() in ("1", "true", "yes", "on"),
+        payme_account=os.getenv("PAYME_ACCOUNT", "").strip() or Config.payme_account,
+        payme_ikpu=os.getenv("PAYME_IKPU", "").strip(),
+        payme_package_code=os.getenv("PAYME_PACKAGE_CODE", "").strip(),
+        payme_vat_percent=int(os.getenv("PAYME_VAT_PERCENT", "0") or 0),
     )

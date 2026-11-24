@@ -383,10 +383,15 @@ function openOperator() {
 function operatorBtn(primary) {
   return h("button", { class: primary ? "btn" : "btn ghost", type: "button", onclick: openOperator }, T("app.operator"));
 }
-// The listing fee: Telegram's own payment form (Click or Payme). Resolves to "paid", "cancelled", "failed" or "pending".
+// The listing fee: Telegram's own payment form (a t.me invoice link) or Payme's checkout page (any other link,
+// paid outside Telegram: the bot writes once Payme confirms). Resolves to "paid", "cancelled", "failed" or "pending".
 function payInvoice(url) {
   return new Promise((resolve) => {
     if (!url) { resolve("failed"); return; }
+    if (!/^https:\/\/t\.me\//.test(url)) {
+      try { tg.openLink(url); } catch (e) { window.open(url, "_blank"); }
+      resolve("pending"); return;
+    }
     try { tg.openInvoice(url, resolve); } catch (e) { tg.openTelegramLink(url); resolve("pending"); }
   });
 }
@@ -982,7 +987,8 @@ function afterSubmit(id, paid) {
   S.tab = "my"; S.stack = [];
   render();
   // paid: null without a fee, "paid" when Telegram took it, anything else: still to pay from «My»
-  toast(paid == null ? T("app.sell.sent", { id }) : paid === "paid" ? T("app.my.paid") : T("app.sell.unpaid_text"));
+  toast(paid == null ? T("app.sell.sent", { id }) : paid === "paid" ? T("app.my.paid")
+        : paid === "pending" ? T("app.pay.external") : T("app.sell.unpaid_text"));
 }
 function sellView() {
   if (!S.draft) S.draft = newDraft(null);
@@ -1034,6 +1040,7 @@ function mineView(view) {
   const pay = h("button", { class: "btn", type: "button", onclick: (e) => busy(e.currentTarget, async () => {
     const res = await api("POST", "listings/" + l.id + "/invoice");
     const status = await payInvoice(res.invoice_url);
+    if (status === "pending") { toast(T("app.pay.external")); return; }
     if (status !== "paid") return;
     haptic("success"); toast(T("app.my.paid"));
     S.my = null; S.tab = "my"; S.stack = []; render();  // the bot moves it to moderation as the payment lands

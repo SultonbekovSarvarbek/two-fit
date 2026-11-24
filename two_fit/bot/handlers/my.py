@@ -48,7 +48,7 @@ async def card(ctx: Ctx, listing: dict, page: int) -> tuple[str, InlineKeyboardM
 
     lid, st = listing["id"], listing["status"]
     rows = []
-    if st == LS.UNPAID and Repo.fee_due(listing) and ctx.cfg.payment_token:
+    if st == LS.UNPAID and Repo.fee_due(listing) and ctx.cfg.payments_on:
         rows.append([btn(ctx.t("my.pay_btn", fee=fmt_money(listing["fee_amount"])), MyCb(action="pay", id=lid, page=page))])
     if st in LS.SELLER_EDITABLE:
         rows.append([btn(ctx.t("my.edit_btn"), MyCb(action="edit", id=lid, page=page))])

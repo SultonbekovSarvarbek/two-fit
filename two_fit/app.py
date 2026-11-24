@@ -92,8 +92,10 @@ async def run() -> None:
         raise SystemExit("BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
     if not cfg.admin_ids:
         log.warning("ADMIN_IDS is empty: nobody can moderate listings. Send /id to the bot to learn your id.")
-    if cfg.listing_fee > 0 and not cfg.payment_token:
-        log.warning("PAYMENT_PROVIDER_TOKEN is empty: listings are placed for free")
+    if cfg.listing_fee > 0 and not cfg.payments_on:
+        log.warning("neither PAYME_MERCHANT_ID/PAYME_KEY nor PAYMENT_PROVIDER_TOKEN is set: listings are placed for free")
+    if cfg.payme_enabled and not cfg.payme_ikpu:
+        log.warning("PAYME_IKPU is empty: Payme receipts go without the fiscal details")
     for path in (cfg.welcome_image, cfg.logo):
         if not path.exists():
             log.warning("image not found: %s (the bot works without it)", path)
@@ -105,9 +107,9 @@ async def run() -> None:
     dp = create_dispatcher(repo, i18n, cfg, bot)
     await setup_bot_profile(bot, i18n, cfg)
     web_runner = None
-    if cfg.webapp_enabled:
+    if cfg.webapp_enabled or cfg.payme_enabled:  # Payme calls POST /payme on the same server
         web_runner = await start_webapp(repo, i18n, cfg, bot, dp["notifier"])
-    elif cfg.webapp_url:
+    if cfg.webapp_url and not cfg.webapp_enabled:
         log.warning("WEBAPP_URL must start with https:// — the Mini App is off")
     reprice_task = asyncio.create_task(reprice_daily(repo))  # runs once now, then every night
     watch_task = None
