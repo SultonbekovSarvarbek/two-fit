@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="format-detection" content="telephone=no">
 <meta name="robots" content="noindex">
-<title>Two Fit</title>
+<title>2FIT</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
 // Pick light or dark before the first paint, from the user's Telegram theme.
@@ -484,8 +484,8 @@ const skeletonDetail = () => h("div", { "aria-busy": "true", "aria-label": T("ap
   h("div", { class: "card hero", "aria-hidden": "true" }, bar("30%"), bar("55%", "28px")),
   h("div", { class: "card rows", "aria-hidden": "true", style: "margin-top:12px" },
     [0, 1, 2].map(() => h("div", null, bar("30%"), bar("35%")))));
-const logo = (big) => h("span", { class: big ? "logo big" : "logo", role: "img", "aria-label": "Two Fit" });
-const brand = () => h("header", { class: "brand" }, logo(), h("span", { class: "wordmark" }, "Two Fit"));
+const logo = (big) => h("span", { class: big ? "logo big" : "logo", role: "img", "aria-label": "2FIT" });
+const brand = () => h("header", { class: "brand" }, logo(), h("span", { class: "wordmark" }, "2FIT"));
 const splash = () => h("div", { class: "splash" }, logo(true), spinner());
 
 /* ---------------------------------------------------------------- catalog */
@@ -987,7 +987,6 @@ function sellForm(d, onDone, onKind) {
     h("div", { class: "card" }, fields.description),
     h("h2", null, T("app.sell.contacts")),
     h("div", { class: "card" }, fields.name, fields.phone),
-    d.fee ? h("p", { class: "note" }, "💳 " + T("app.sell.fee", { fee: money(d.fee) })) : null,
     !d.id && B.vars.instagram ? h("div", { class: "card stack", style: "padding:14px 16px" },
       h("div", null, "📸 " + T("app.sell.instagram")),
       h("button", { class: "btn ghost", type: "button", onclick: () => {
@@ -1015,7 +1014,10 @@ function sellView() {
     title.textContent = T("app.sell.title_" + key);
     intro.textContent = T("app.sell.intro_" + key);
   };
-  return [title, intro, sellForm(S.draft, afterSubmit, onKind)];
+  // Placing a listing is paid: say how much before the seller fills anything in.
+  const fee = B.vars.fee ? h("div", { class: "callout", style: "margin:0 0 14px" },
+    "💳 " + T("app.sell.fee", { fee: money(B.vars.fee) })) : null;
+  return [title, fee, intro, sellForm(S.draft, afterSubmit, onKind)];
 }
 function editView(view) {
   if (!view.draft) view.draft = newDraft(view.listing);
@@ -1122,7 +1124,7 @@ function gate(lines, retry) {
 }
 async function start() {
   if (!tg || !tg.initData) {
-    gate(["Откройте Two Fit внутри Telegram — через кнопку в чате с ботом.", "Two Fit иловасини Telegram ичида, бот билан чатдаги тугма орқали очинг."]);
+    gate(["Откройте 2FIT внутри Telegram — через кнопку в чате с ботом.", "2FIT иловасини Telegram ичида, бот билан чатдаги тугма орқали очинг."]);
     return;
   }
   $view.replaceChildren(splash());

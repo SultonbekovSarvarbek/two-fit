@@ -62,7 +62,7 @@ async def setup_bot_profile(bot: Bot, i18n: I18n, cfg: Config) -> None:
             )
         # The button next to the message field opens the Mini App (or goes back to the default one).
         await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(text="Two Fit", web_app=WebAppInfo(url=cfg.webapp_url))
+            menu_button=MenuButtonWebApp(text="2FIT", web_app=WebAppInfo(url=cfg.webapp_url))
             if cfg.webapp_enabled else MenuButtonDefault()
         )
     except Exception as e:  # noqa: BLE001

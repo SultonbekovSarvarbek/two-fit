@@ -89,7 +89,7 @@ async def test_full_happy_path(h):
     assert alerts(await h.click(STRANGER, "ad:open:1:0:")) == ["Эта кнопка устарела. Откройте раздел заново."]
     assert "+998901112233" not in h.texts_to(STRANGER)
     home = await h.send(ADMIN, "/admin")
-    assert "Админка Two Fit" in texts(home)
+    assert "Админка 2FIT" in texts(home)
     card = await h.click(ADMIN, "ad:open:1:0:")
     assert "+998901112233" in texts(card) and "Алишер" in texts(card) and "@user1" in texts(card)
     shot = await h.click(ADMIN, "ad:shot:1:0:")
