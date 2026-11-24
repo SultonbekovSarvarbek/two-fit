@@ -400,17 +400,33 @@ function openTg(username) {
   try { tg.openTelegramLink(url); } catch (e) { window.open(url, "_blank"); }
 }
 // What every buyer sees to reach the seller: the name, the phone (tap to call) and Telegram.
-function sellerCard(s) {
+// Taps on the seller's contacts are recorded (who reached which seller), never blocking the tap itself.
+function trackContact(id, action) {
+  if (!id) return;
+  try {
+    fetch(new URL("api/listings/" + id + "/contact", document.baseURI), {
+      method: "POST", keepalive: true,
+      headers: { Authorization: "tma " + tg.initData, "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    }).catch(() => {});
+  } catch (e) { /* offline: the tap still works */ }
+}
+function sellerCard(s, listingId) {
   const tel = String(s.phone || "").replace(/[^\d+]/g, "");
-  const copy = () => { try { navigator.clipboard.writeText(s.phone).then(() => toast(T("app.seller.copied"))); } catch (e) { /* no clipboard */ } };
+  const copy = () => {
+    trackContact(listingId, "copy");
+    try { navigator.clipboard.writeText(s.phone).then(() => toast(T("app.seller.copied"))); } catch (e) { /* no clipboard */ }
+  };
   return [
     h("div", { class: "card rows" },
       h("div", null, h("span", { class: "k" }, T("app.seller.title")), h("span", { class: "v" }, s.name)),
       s.phone ? h("div", { onclick: copy }, h("span", { class: "k" }, T("app.f.phone")), h("span", { class: "v num" }, s.phone)) : null,
       s.username ? h("div", null, h("span", { class: "k" }, "Telegram"), h("span", { class: "v" }, "@" + s.username)) : null),
     h("div", { class: "stack" },
-      s.username ? h("button", { class: "btn", type: "button", onclick: () => openTg(s.username) }, T("app.seller.tg")) : null,
-      tel ? h("a", { class: s.username ? "btn ghost" : "btn", href: "tel:" + tel }, T("app.seller.call")) : null),
+      s.username ? h("button", { class: "btn", type: "button",
+        onclick: () => { trackContact(listingId, "telegram"); openTg(s.username); } }, T("app.seller.tg")) : null,
+      tel ? h("a", { class: s.username ? "btn ghost" : "btn", href: "tel:" + tel,
+        onclick: () => trackContact(listingId, "call") }, T("app.seller.call")) : null),
   ];
 }
 async function busy(button, fn) {
@@ -592,7 +608,7 @@ function listingView(view, rev) {
       priceHero(l), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
       h("h2", null, T("app.seller.title")),
-      sellerCard(l.seller),
+      sellerCard(l.seller, l.id),
       h("p", { class: "note" }, "🛡 " + T("app.seller.safety"))),
   ];
 }

@@ -554,3 +554,45 @@ async def test_bot_requires_the_screenshot(tmp_path):
         assert "Как вас зовут" in texts(await h.click(SELLER, "sl:shotsdone:"))
     finally:
         await h.stop()
+
+
+async def test_buyers_reaching_the_seller_are_recorded_for_the_admin(h, api):
+    from two_fit.bot.handlers.admin import render_card, render_contacts
+    from two_fit.bot.context import Ctx
+    lid = await publish(h, api)
+    # the buyer opens the card and taps «Call» and Telegram; the seller's own taps do not count
+    assert (await api.call("GET", f"/api/listings/{lid}", BUYER))[0] == 200
+    await h.repo.save_contact(BUYER, "Покупатель", "+998 90 555 44 33")  # a name they gave when selling
+    for action in ("call", "telegram", "call"):  # the second «Call» within 10 minutes is the same contact
+        assert (await api.call("POST", f"/api/listings/{lid}/contact", BUYER, {"action": action}))[0] == 200
+    await api.call("GET", f"/api/listings/{lid}", STRANGER)  # only looked
+    await api.call("POST", f"/api/listings/{lid}/contact", SELLER, {"action": "call"})
+    status, err = await api.call("POST", f"/api/listings/{lid}/contact", BUYER, {"action": "hack"})
+    assert status == 400
+    status, _ = await api.call("POST", "/api/listings/9999/contact", BUYER, {"action": "call"})
+    assert status == 404
+
+    assert await h.repo.contact_counts(lid) == {"buyers": 2, "reached": 1}
+    rows = {r["user_id"]: r for r in await h.repo.contact_buyers(lid)}
+    assert set(rows) == {STRANGER, BUYER}
+    buyer = rows[BUYER]
+    assert (buyer["views"], buyer["calls"], buyer["telegram"], buyer["copies"]) == (1, 1, 1, 0)
+
+    ctx = Ctx(h.repo, I18n(), h.cfg, {"id": ADMIN, "lang": "ru"})
+    card, markup = await render_card(ctx, await h.repo.get_listing(lid))
+    assert "Открыли контакты продавца: 2" in card and "«Позвонить»: 1" in card
+    assert any("Кто связывался (2)" in b.text for row in markup.inline_keyboard for b in row)
+    text, _ = await render_contacts(ctx, await h.repo.get_listing(lid))
+    assert f'<a href="tg://user?id={BUYER}">Покупатель</a> @user{BUYER} — 📞 ✈️' in text
+    assert "+998 90 555 44 33" in text and "👀 открыл" in text
+
+
+async def test_bot_card_view_is_recorded(h):
+    await h.repo.touch_user(SELLER, "seller", "Seller")
+    lid = await h.repo.create_listing(SELLER, "ru", {**repo_draft(), "city": "tashkent"})
+    await h.repo.approve(lid, ADMIN)
+    await h.repo.touch_user(BUYER, "buyer", "Buyer")
+    await h.repo.set_lang(BUYER, "ru")
+    from two_fit.bot.callbacks import CardCb
+    await h.click(BUYER, CardCb(id=lid).pack())
+    assert await h.repo.contact_counts(lid) == {"buyers": 1, "reached": 0}

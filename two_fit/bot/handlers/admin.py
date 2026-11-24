@@ -36,6 +36,31 @@ def A(action: str, id: int = 0, page: int = 0, extra: str = "") -> AdmCb:  # noq
 
 
 # ------------------------------------------------------------------ rendering
+CONTACT_ICONS = (("calls", "📞"), ("telegram", "✈️"), ("copies", "📋"))
+
+
+def buyer_link(row: dict) -> str:
+    """The buyer's name as a link that opens their Telegram chat (by id, so it works without a username)."""
+    name = esc(row["contact_name"] or row["tg_name"] or str(row["user_id"]))
+    ref = f' @{esc(row["username"])}' if row["username"] else ""
+    return f'<a href="tg://user?id={row["user_id"]}">{name}</a>{ref}'
+
+
+async def render_contacts(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    """Who reached the seller of this listing: ask them whether they bought it."""
+    rows = await ctx.repo.contact_buyers(listing["id"])
+    lines = [ctx.t("admin.contacts.title", id=listing["id"], n=len(rows))]
+    for r in rows:
+        how = " ".join(f"{icon}{r[key] if r[key] > 1 else ''}" for key, icon in CONTACT_ICONS if r[key])
+        line = f"• {buyer_link(r)} — {how or ctx.t('admin.contacts.viewed')} · {fmt_dt(r['last_at'])}"
+        if r["contact_phone"]:
+            line += f" · {esc(r['contact_phone'])}"
+        lines.append(line)
+    lines.append(ctx.t("admin.contacts.legend"))
+    lid = listing["id"]
+    return "\n".join(lines), kb([btn(ctx.t("admin.back"), A("open", id=lid, extra=back))])
+
+
 async def render_home(ctx: Ctx) -> tuple[str, InlineKeyboardMarkup]:
     pending = await ctx.repo.count_status(LS.PENDING)
     return ctx.t("admin.title"), kb(
@@ -130,6 +155,8 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
         extra.append(ctx.t("admin.card.reason", reason=esc(listing["reject_reason"])))
     if listing["status"] == LS.SOLD and listing["sale_reported_at"]:
         extra.append(ctx.t("admin.card.sold", date=fmt_dt(listing["sale_reported_at"])))
+    counts = await ctx.repo.contact_counts(listing["id"])
+    extra.append(ctx.t("admin.card.contacts", **counts) if counts["buyers"] else ctx.t("admin.card.no_contacts"))
     text += "\n\n" + "\n".join(extra)
 
     lid, st = listing["id"], listing["status"]
@@ -141,6 +168,8 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
         rows.append([btn(ctx.t("admin.reject"), A("rej", id=lid))])
     if listing["screenshot_file_id"]:
         rows.append([btn(ctx.t("admin.screenshot_btn"), A("shot", id=lid))])
+    if counts["buyers"]:
+        rows.append([btn(ctx.t("admin.contacts_btn", n=counts["buyers"]), A("cont", id=lid, extra=back))])
     if st in LS.ADMIN_REMOVABLE:
         rows.append([btn(ctx.t("admin.remove"), A("rm", id=lid))])
     rows.append([btn(ctx.t("admin.back"), A("lst", extra=back or st)), btn(ctx.t("admin.btn.home"), A("home"))])
@@ -226,6 +255,9 @@ async def _listing_action(call: CallbackQuery, ctx: Ctx, state: FSMContext, noti
         await state.clear()
         await call.answer()
         await _show(call, *await render_card(ctx, listing, extra))
+    elif a == "cont":
+        await call.answer()
+        await _show(call, *await render_contacts(ctx, listing, extra))
     elif a == "shot":
         await call.answer()
         ids = Repo.screenshot_ids(listing)

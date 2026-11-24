@@ -184,6 +184,7 @@ class WebApp:
         r.add_post(r"/api/listings/{id:\d+}/invoice", self.invoice)
         r.add_post(r"/api/listings/{id:\d+}/withdraw", self.withdraw)
         r.add_post(r"/api/listings/{id:\d+}/sold", self.sold)
+        r.add_post(r"/api/listings/{id:\d+}/contact", self.contact)
         if self.cfg.payme_enabled:
             r.add_post("/payme", self.payme_rpc)  # Payme's own Basic auth, not initData
         return app
@@ -333,7 +334,20 @@ class WebApp:
             raise ApiError(404, "not_available", ctx.t("common.not_available"))
         view = public_view(listing, self.repo.fit_prices)
         view["seller"] = seller_view(listing, await self.repo.get_user(listing["seller_id"]))
+        await self.repo.log_contact(listing_id, ctx.user_id, "view")  # the card shows the contacts
         return web.json_response({"listing": view, "own": False})
+
+    async def contact(self, request: web.Request) -> web.Response:
+        """A buyer tapped the seller's phone, Telegram or «Call»: the admin can later ask them about the deal."""
+        ctx = request[CTX]
+        action = (await self._json(request)).get("action")
+        if action not in ("call", "telegram", "copy"):
+            raise ApiError(400, "bad_request", "Bad request")
+        listing_id = int(request.match_info["id"])
+        if not self.repo.is_available(await self.repo.get_listing(listing_id)):
+            raise ApiError(404, "not_available", ctx.t("common.not_available"))
+        await self.repo.log_contact(listing_id, ctx.user_id, action)
+        return web.json_response({"ok": True})
 
     # ------------------------------------------------------------------ selling
     @staticmethod

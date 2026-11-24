@@ -332,7 +332,7 @@ async def test_installment_wizard_and_card(h):
     preview = texts(await h.send(SELLER, contact="+998901112233"))
     assert "💰 Цена: <b>4\xa0500\xa0000 сум</b>" in preview
     assert "Рассрочка" not in preview
-    assert "❄️ Заморозка: осталось 20 дн." in preview
+    assert "Заморозка" not in preview  # the freeze days are kept, not shown in the bot
     await h.click(SELLER, "sl:send:")
     listing = (await h.repo.seller_listings(SELLER, 10, 0))[0][0]
     assert (listing["paid_in_full"], listing["monthly_payment"], listing["payments_left"]) == (0, 500_000, 9)

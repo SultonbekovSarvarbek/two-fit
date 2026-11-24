@@ -129,6 +129,17 @@ CREATE TABLE IF NOT EXISTS fee_payments (
     refunded_at         TEXT                       -- Payme cancelled a performed payment (money returned)
 );
 
+-- Buyers reaching a seller: opening the listing's contacts, tapping the phone, Telegram or «Call».
+-- Lets the admin ask the buyers themselves whether a deal happened (sellers may not report a sale).
+CREATE TABLE IF NOT EXISTS contact_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id  INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    action      TEXT NOT NULL,                     -- view | call | telegram | copy
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_contact_listing ON contact_events(listing_id, user_id);
+
 -- Payme Merchant API: one row per Payme transaction. Times are Unix milliseconds, as Payme sends them.
 CREATE TABLE IF NOT EXISTS payme_transactions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,  -- ours: «transaction» in the answers to Payme
@@ -637,6 +648,44 @@ class Repo:
                                   (LS.UNPAID, listing_id, LS.PENDING, LS.APPROVED))
         await self._log(listing_id, None, "fee_refunded", charge_id=charge_id)
         return await self.get_listing(listing_id)
+
+    # ---------------------------------------------------------- buyers reaching sellers
+    CONTACT_ACTIONS = ("view", "call", "telegram", "copy")
+    CONTACT_REPEAT_SECONDS = 600  # the same tap again within 10 minutes is not a new contact
+
+    async def log_contact(self, listing_id: int, user_id: int, action: str) -> bool:
+        """A buyer saw or used the seller's contacts. The seller's own taps are not counted."""
+        if action not in self.CONTACT_ACTIONS:
+            return False
+        listing = await self.get_listing(listing_id)
+        if not listing or listing["seller_id"] == user_id:
+            return False
+        since = (datetime.now(timezone.utc) - timedelta(seconds=self.CONTACT_REPEAT_SECONDS)).isoformat(timespec="seconds")
+        async with self.tx():
+            if await self._scalar("SELECT 1 FROM contact_events WHERE listing_id=? AND user_id=? AND action=?"
+                                  " AND created_at>=?", (listing_id, user_id, action, since)):
+                return False
+            await self.db.execute("INSERT INTO contact_events(listing_id, user_id, action, created_at) VALUES (?,?,?,?)",
+                                  (listing_id, user_id, action, now_iso()))
+        return True
+
+    async def contact_buyers(self, listing_id: int, limit: int = 50) -> list[dict[str, Any]]:
+        """Who reached this seller, most recent first: one row per buyer with how and when."""
+        return await self._all(
+            """SELECT e.user_id, u.username, u.tg_name, u.contact_name, u.contact_phone,
+                      SUM(e.action='view') AS views, SUM(e.action='call') AS calls,
+                      SUM(e.action='telegram') AS telegram, SUM(e.action='copy') AS copies,
+                      MIN(e.created_at) AS first_at, MAX(e.created_at) AS last_at
+               FROM contact_events e LEFT JOIN users u ON u.id = e.user_id
+               WHERE e.listing_id=? GROUP BY e.user_id ORDER BY last_at DESC LIMIT ?""", (listing_id, limit))
+
+    async def contact_counts(self, listing_id: int) -> dict[str, int]:
+        """buyers: everyone who opened the contacts; reached: those who tapped the phone, Telegram or «Call»."""
+        row = await self._one(
+            """SELECT COUNT(DISTINCT user_id) AS buyers,
+                      COUNT(DISTINCT CASE WHEN action != 'view' THEN user_id END) AS reached
+               FROM contact_events WHERE listing_id=?""", (listing_id,))
+        return {"buyers": row["buyers"] or 0, "reached": row["reached"] or 0}
 
     # ---------------------------------------------------------- Payme transactions
     # Callers hold ``tx()``: Payme's calls for one listing must not interleave.

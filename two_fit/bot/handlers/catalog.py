@@ -101,6 +101,7 @@ async def on_card(call: CallbackQuery, callback_data: CardCb, ctx: Ctx) -> None:
         await _edit(call, text, markup)
         return
     contacts, tg_row = await seller_contacts(ctx, listing)
+    await ctx.repo.log_contact(listing["id"], ctx.user_id, "view")  # the card shows the seller's contacts
     text = listing_public(ctx, listing, listing["id"]) + "\n\n" + contacts + "\n\n" + ctx.t("catalog.safety")
     await call.answer()
     await _edit(call, text, card_markup(ctx, tg_row, callback_data.page, callback_data.city))

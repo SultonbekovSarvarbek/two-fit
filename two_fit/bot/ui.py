@@ -148,8 +148,6 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
         text += ctx.t("card.negotiable")
     if installments:
         text += payment_line(ctx, data)
-    if data.get("freeze_days"):
-        text += ctx.t("card.freeze", days=data["freeze_days"])
     if data.get("description"):
         text += ctx.t("card.desc", desc=esc(data["description"]))
     return text
@@ -194,11 +192,7 @@ def payment_line(ctx: Ctx, data: dict[str, Any]) -> str:
         return ""
     if paid:
         return ctx.t("card.paid_full")
-    monthly, left = data.get("monthly_payment"), data.get("payments_left")
-    if not (monthly and left):
-        return ""
-    return ctx.t("card.installment", price=fmt_money(data.get("price") or 0), monthly=fmt_money(monthly), left=left,
-                 total=fmt_money(monthly * left))
+    return ""  # installments: the price already is the whole sum; splitting it out only confused people
 
 
 def tg_url(username: str | None) -> str | None:
