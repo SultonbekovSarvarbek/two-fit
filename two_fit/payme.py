@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import hmac
 import json
 import logging
@@ -29,7 +30,7 @@ SUBUNITS = 100            # 1 сум = 100 tiyin
 TIMEOUT_MS = 12 * 3600 * 1000  # a created transaction not performed within 12 hours is cancelled
 CHECKOUT = "https://checkout.paycom.uz"
 CHECKOUT_TEST = "https://checkout.test.paycom.uz"
-KEY_SETTING = "payme_key"  # a key Payme set with ChangePassword overrides the one in .env
+KEY_SETTING = "payme_key"  # a key Payme set with ChangePassword overrides the one in .env…
 
 # Transaction states and cancel reasons (as Payme numbers them)
 CREATED, PERFORMED, CANCELLED, CANCELLED_AFTER_PERFORM = 1, 2, -1, -2
@@ -38,7 +39,9 @@ REASON_TIMEOUT = 4
 # Error codes
 E_PARSE, E_RPC, E_METHOD, E_POST, E_AUTH, E_SYSTEM = -32700, -32600, -32601, -32300, -32504, -32400
 E_AMOUNT, E_NO_TX, E_CANT_CANCEL, E_CANT_PERFORM = -31001, -31003, -31007, -31008
-E_NO_ORDER, E_NOT_PAYABLE, E_BUSY = -31050, -31051, -31052  # account errors: -31050…-31099
+# Account errors (-31050…-31099, «data» names the account field): the sandbox expects them for an order
+# that does not exist, is already paid or withdrawn («Заблокирован»), or is held by another payment («В процессе»).
+E_NO_ORDER, E_NOT_PAYABLE, E_BUSY = -31050, -31051, -31052
 
 MESSAGES = {
     E_PARSE: ("Ошибка разбора JSON", "JSON таҳлилида хато", "Parse error"),
@@ -121,15 +124,19 @@ class Payme:
                     await after()
                 except Exception:  # noqa: BLE001 — the payment is recorded; a failed message must not undo it
                     log.exception("payme: notification failed")
-            return {"jsonrpc": "2.0", "id": request_id, "result": result}
+            return {"id": request_id, "result": result}
         except PaymeError as e:
-            return {"jsonrpc": "2.0", "id": request_id, "error": e.body()}
+            return {"id": request_id, "error": e.body()}
         except Exception:  # noqa: BLE001
             log.exception("payme: request failed")
-            return {"jsonrpc": "2.0", "id": request_id, "error": PaymeError(E_SYSTEM).body()}
+            return {"id": request_id, "error": PaymeError(E_SYSTEM).body()}
+
+    def _key_setting(self) -> str:
+        """…but only that .env key: a new PAYME_KEY (the live key after the sandbox) starts clean."""
+        return f"{KEY_SETTING}:{hashlib.sha256(self.cfg.payme_key.encode()).hexdigest()[:16]}"
 
     async def _key(self) -> str:
-        return (await self.repo.get_setting(KEY_SETTING)) or self.cfg.payme_key
+        return (await self.repo.get_setting(self._key_setting())) or self.cfg.payme_key
 
     async def _authorized(self, header: str | None) -> bool:
         scheme, _, value = (header or "").partition(" ")
@@ -168,13 +175,23 @@ class Payme:
         except ValueError:
             raise PaymeError(E_NO_ORDER, field) from None
         listing = await self.repo.get_listing(listing_id)
-        if not listing:
+        if not listing or not listing["fee_amount"]:
             raise PaymeError(E_NO_ORDER, field)
-        if listing["status"] != LS.UNPAID or not Repo.fee_due(listing):
-            raise PaymeError(E_NOT_PAYABLE, field)
         if amount != listing["fee_amount"] * SUBUNITS:
             raise PaymeError(E_AMOUNT, "amount")
+        if listing["status"] != LS.UNPAID or not Repo.fee_due(listing):
+            raise PaymeError(E_NOT_PAYABLE, field)  # already paid or withdrawn («Заблокирован»)
         return listing
+
+    async def _not_busy(self, listing: dict[str, Any], payme_id: str | None = None) -> None:
+        """Another payment of this listing is open («В процессе» in the sandbox): it cannot be paid twice.
+        An open one past the 12 hours is cancelled on the way (caller holds tx())."""
+        for other in await self.repo.payme_active(listing["id"]):
+            if other["payme_id"] == payme_id:
+                continue
+            if not self._expired(other):
+                raise PaymeError(E_BUSY, self.cfg.payme_account)
+            await self._timeout(other)
 
     def _detail(self, listing: dict[str, Any]) -> dict[str, Any] | None:
         """The fiscal receipt: one item, the listing fee. Without an IKPU there is no receipt to send."""
@@ -202,7 +219,9 @@ class Payme:
 
     # ------------------------------------------------------------------ methods
     async def check_perform(self, params: dict[str, Any]):
-        listing = await self._payable(params)
+        async with self.repo.tx():
+            listing = await self._payable(params)
+            await self._not_busy(listing)
         result: dict[str, Any] = {"allow": True}
         detail = self._detail(listing)
         if detail:
@@ -215,10 +234,7 @@ class Payme:
             tx = await self.repo.payme_get(payme_id)
             if tx is None:
                 listing = await self._payable(params)
-                for other in await self.repo.payme_active(listing["id"]):
-                    if not self._expired(other):
-                        raise PaymeError(E_BUSY, self.cfg.payme_account)  # another payment of the same listing
-                    await self._timeout(other)
+                await self._not_busy(listing)
                 if now_ms() - payme_time > TIMEOUT_MS:
                     raise PaymeError(E_CANT_PERFORM)
                 tx = await self.repo.payme_insert(payme_id, listing["id"], listing["fee_amount"] * SUBUNITS,
@@ -292,7 +308,7 @@ class Payme:
         } for tx in rows]}, None
 
     async def change_password(self, params: dict[str, Any]):
-        await self.repo.set_setting(KEY_SETTING, self._str(params, "password"))
+        await self.repo.set_setting(self._key_setting(), self._str(params, "password"))
         log.warning("payme: the cash desk key was changed by Payme (ChangePassword)")
         return {"success": True}, None
 

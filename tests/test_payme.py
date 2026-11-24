@@ -100,7 +100,8 @@ async def test_full_payment(env):
     assert created["state"] == 1 and created["transaction"]
     again = await rpc.ok("CreateTransaction", id="tx-1", time=t, amount=TIYIN, account=account(lid))
     assert again == created  # Payme may repeat a call: the same answer
-    # a second payment of the same listing while the first one is open
+    # a second payment of the same listing while the first one is open («В процессе»)
+    assert await rpc.err("CheckPerformTransaction", amount=TIYIN, account=account(lid)) == payme.E_BUSY
     assert await rpc.err("CreateTransaction", id="tx-2", time=t, amount=TIYIN, account=account(lid)) == payme.E_BUSY
 
     done = await rpc.ok("PerformTransaction", id="tx-1")
@@ -123,8 +124,11 @@ async def test_full_payment(env):
     assert (tx["id"], tx["amount"], tx["account"], tx["state"]) == ("tx-1", TIYIN, account(lid), 2)
     assert (await rpc.ok("GetStatement", **{"from": t + 1, "to": t + 1000}))["transactions"] == []
 
-    # paid: Payme may not take it again
+    # paid («Заблокирован»): Payme may not take it again
     assert await rpc.err("CheckPerformTransaction", amount=TIYIN, account=account(lid)) == payme.E_NOT_PAYABLE
+    assert await rpc.err("CreateTransaction", id="tx-3", time=t, amount=TIYIN, account=account(lid)) == payme.E_NOT_PAYABLE
+    body = await rpc("CreateTransaction", id="tx-4", time=t, amount=TIYIN, account=account(lid))
+    assert body["error"]["data"] == "order_id" and set(body["error"]["message"]) == {"ru", "uz", "en"}
     assert (await h.repo.stats())["payments"] == 1
 
 
@@ -182,6 +186,10 @@ async def test_change_password(env):
     assert (await rpc("CheckTransaction", id="x"))["error"]["code"] == payme.E_AUTH  # the old key no longer works
     body = await rpc("CheckTransaction", auth=basic("new-key"), id="x")
     assert body["error"]["code"] == payme.E_NO_TX
+    # a new key in .env (the live one after the sandbox) is not overridden by the sandbox's change
+    live = payme.Payme(h.repo, replace(h.cfg, payme_key="live-key"), receipt_title=str)
+    assert await live._authorized(basic("live-key"))
+    assert not await live._authorized(basic("new-key"))
 
 
 def decode(url: str) -> str:
