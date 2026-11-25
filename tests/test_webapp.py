@@ -639,3 +639,5 @@ async def test_documents_and_logos_are_public(h, api):
     assert res.status == 200 and "{{" not in await res.text()
     res = await api.client.get("/clubs/ufc.png")
     assert res.status == 200 and res.content_type == "image/png"
+    res = await api.client.get("/clubs/1fit.svg")
+    assert res.status == 200 and res.content_type == "image/svg+xml"

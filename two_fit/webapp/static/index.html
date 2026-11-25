@@ -104,7 +104,8 @@ p { margin: 0; }
 .clogo { display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%; overflow: hidden;
   width: 22px; height: 22px; background: #111; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: -0.02em; }
 .clogo img { width: 100%; height: 100%; object-fit: cover; }
-.clogo.fit { background: #ff4d2e; }
+.clogo.fit { background: #3447F6; }
+.clogo.fit img { object-fit: contain; padding: 0 1px; }  /* 1Fit's mark is a wide pill: fit it whole into the circle */
 .club-tag { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .club-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .club-grid button { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; text-align: left;
@@ -539,8 +540,8 @@ const isPromo = (l) => l.kind === "promo";
 const clubOf = (l) => l.club || "1fit";
 const clubName = (code) => ((B.vars.clubs || []).find((c) => c.code === code) || { name: "1Fit" }).name;
 function clubLogo(code) {
-  if (code === "1fit") return h("span", { class: "clogo fit", "aria-hidden": "true" }, "1Fit");
-  return h("span", { class: "clogo", "aria-hidden": "true" }, h("img", { src: "clubs/" + code + ".png", alt: "", loading: "lazy" }));
+  const src = "clubs/" + code + (code === "1fit" ? ".svg" : ".png");
+  return h("span", { class: "clogo" + (code === "1fit" ? " fit" : ""), "aria-hidden": "true" }, h("img", { src, alt: "", loading: "lazy" }));
 }
 const clubTag = (l) => isPromo(l) ? null : h("div", { class: "club-tag" }, clubLogo(clubOf(l)), clubName(clubOf(l)));
 // Months left instead of a tariff name: «12 months» made buyers think they got all 12.
