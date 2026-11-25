@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at    TEXT NOT NULL
 );
 
+-- Who came on which day (Tashkent time), through the bot or the Mini App: one row per person, day and way.
+CREATE TABLE IF NOT EXISTS visits (
+    day      TEXT NOT NULL,      -- YYYY-MM-DD
+    user_id  INTEGER NOT NULL,
+    source   TEXT NOT NULL,      -- bot | app
+    PRIMARY KEY (day, user_id, source)
+);
+
 CREATE TABLE IF NOT EXISTS listings (
     id                        INTEGER PRIMARY KEY AUTOINCREMENT,
     seller_id                 INTEGER NOT NULL REFERENCES users(id),
@@ -368,9 +376,13 @@ class Repo:
         return Repo._Tx(self)
 
     # ------------------------------------------------------------------ users
-    async def touch_user(self, user_id: int, username: str | None, tg_name: str | None) -> dict[str, Any]:
+    async def touch_user(self, user_id: int, username: str | None, tg_name: str | None,
+                         source: str = "bot") -> dict[str, Any]:
+        """Every message, button or Mini App request: the user's profile, and today's visit (counted once a day)."""
         async with self.tx():
             ts = now_iso()
+            await self.db.execute("INSERT OR IGNORE INTO visits(day, user_id, source) VALUES (?,?,?)",
+                                  (today_local().isoformat(), user_id, source))
             await self.db.execute(
                 """INSERT INTO users(id, username, tg_name, created_at, updated_at) VALUES (?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET username=excluded.username, tg_name=excluded.tg_name,
@@ -888,6 +900,47 @@ class Repo:
             "sold": await self.count_status(LS.SOLD),
             "payments": fees["n"],
             "fees": fees["total"],
+        }
+
+    VISIT_DAYS = 7  # the day-by-day lines in the statistics
+
+    async def visit_stats(self, exclude: frozenset[int] = frozenset(), today: date | None = None) -> dict[str, Any]:
+        """How many people came: unique per period, through the bot and the Mini App, and how many are new.
+        ``exclude``: the admins, who come every day and are not the audience."""
+        today = today or today_local()
+        day = lambda n: (today - timedelta(days=n)).isoformat()  # noqa: E731
+        skip = f" AND user_id NOT IN ({','.join('?' * len(exclude))})" if exclude else ""
+        skip_users = skip.replace("user_id", "id")
+        ex = tuple(exclude)
+
+        async def came(since: str, until: str | None = None, source: str | None = None) -> int:
+            where = "day>=?" + (" AND day<=?" if until else "") + (" AND source=?" if source else "")
+            args = (since,) + ((until,) if until else ()) + ((source,) if source else ())
+            return await self._scalar(f"SELECT COUNT(DISTINCT user_id) FROM visits WHERE {where}{skip}", args + ex)
+
+        # a new user: their first day in Tashkent time (created_at is UTC)
+        first_day = "date(created_at, '+5 hours')"
+
+        async def new(since: str, until: str | None = None) -> int:
+            where = f"{first_day}>=?" + (f" AND {first_day}<=?" if until else "")
+            args = (since,) + ((until,) if until else ())
+            return await self._scalar(f"SELECT COUNT(*) FROM users WHERE {where}{skip_users}", args + ex)
+
+        days = []
+        for n in range(self.VISIT_DAYS):
+            d = day(n)
+            days.append({"day": d, "came": await came(d, d), "new": await new(d, d)})
+        since_row = await self._one("SELECT MIN(day) AS d FROM visits")
+        return {
+            "users": await self._scalar(f"SELECT COUNT(*) FROM users WHERE 1=1{skip_users}", ex),
+            "new_today": await new(day(0)), "new_7": await new(day(6)), "new_30": await new(day(29)),
+            "today": await came(day(0)), "today_bot": await came(day(0), source="bot"),
+            "today_app": await came(day(0), source="app"),
+            "yesterday": await came(day(1), day(1)),
+            "d7": await came(day(6)), "d7_app": await came(day(6), source="app"),
+            "d30": await came(day(29)),
+            "days": days,
+            "since": since_row["d"] if since_row else None,  # counting started that day
         }
 
     async def admins_langs(self, admin_ids: frozenset[int]) -> dict[int, str]:

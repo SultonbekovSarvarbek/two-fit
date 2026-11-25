@@ -585,5 +585,8 @@
   "app.legal.terms_link": "пользовательское соглашение",
   "app.more.docs": "Документы",
   "app.legal.offer_title": "Публичная оферта",
-  "app.legal.terms_title": "Пользовательское соглашение"
+  "app.legal.terms_title": "Пользовательское соглашение",
+  "admin.stats.visits": "👥 <b>Пользователи</b>\nВсего в боте: {users}\nНовых: сегодня {new_today} · за 7 дней {new_7} · за 30 дней {new_30}\n\n🚪 <b>Заходили</b> (уникальные люди)\nСегодня: <b>{today}</b> — бот {today_bot}, Mini App {today_app}\nВчера: {yesterday}\nЗа 7 дней: {d7} (из них в Mini App {d7_app})\nЗа 30 дней: {d30}\n\n📅 <b>По дням</b>\n{days}\n\n<i>Админы не считаются. Заходы считаются с {since}.</i>",
+  "admin.stats.day": "{day} — {came} чел. (новых {new})",
+  "admin.stats.refresh": "🔄 Обновить"
 }

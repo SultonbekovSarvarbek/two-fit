@@ -534,3 +534,22 @@ async def test_other_club_membership_has_no_1fit_questions(h):
     assert "Пока нет" in texts(await h.click(BUYER, "cat:0:.ozone"))
     card = texts(await h.click(BUYER, "card:1:0:.ufc"))
     assert "UFC Gym" in card and "1Fit" in card  # the safety note: «in the club or in the 1Fit app»
+
+
+async def test_admin_sees_how_many_people_come(h, tmp_path):
+    """Unique people per day through the bot and the Mini App; the admins are not counted."""
+    await choose_lang(h, SELLER, "ru")
+    await choose_lang(h, BUYER, "uz")
+    await h.send(BUYER, "🏋️ Барча абонементлар")  # the same person twice a day is one visit
+    await h.repo.touch_user(STRANGER, None, "Mini App", source="app")
+    await h.repo.touch_user(SELLER, None, "Seller", source="app")
+    # someone who came 3 days ago and not since
+    old = (today_local() - timedelta(days=3)).isoformat()
+    await h.repo.db.execute("INSERT INTO visits(day, user_id, source) VALUES (?,?,?)", (old, 77, "bot"))
+    await choose_lang(h, ADMIN, "ru")
+    v = await h.repo.visit_stats(exclude=h.cfg.admin_ids)
+    assert (v["today"], v["today_bot"], v["today_app"], v["d7"], v["d7_app"]) == (3, 2, 2, 4, 2)
+    assert v["new_today"] == 3 and v["days"][3]["came"] == 1
+    text = texts(await h.click(ADMIN, "ad:stats:0:0:"))
+    assert "Сегодня: <b>3</b> — бот 2, Mini App 2" in text and "За 7 дней: 4" in text
+    assert "Админы не считаются" in text

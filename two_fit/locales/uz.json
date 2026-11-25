@@ -585,5 +585,8 @@
   "app.legal.terms_link": "фойдаланувчи келишуви",
   "app.more.docs": "Ҳужжатлар",
   "app.legal.offer_title": "Оммавий оферта",
-  "app.legal.terms_title": "Фойдаланувчи келишуви"
+  "app.legal.terms_title": "Фойдаланувчи келишуви",
+  "admin.stats.visits": "👥 <b>Фойдаланувчилар</b>\nБотда жами: {users}\nЯнгилар: бугун {new_today} · 7 кунда {new_7} · 30 кунда {new_30}\n\n🚪 <b>Кирганлар</b> (такрорланмас одамлар)\nБугун: <b>{today}</b> — бот {today_bot}, Mini App {today_app}\nКеча: {yesterday}\n7 кунда: {d7} (шундан Mini App'да {d7_app})\n30 кунда: {d30}\n\n📅 <b>Кунлар бўйича</b>\n{days}\n\n<i>Админлар ҳисобланмайди. Киришлар {since} дан ҳисобланади.</i>",
+  "admin.stats.day": "{day} — {came} киши (янги {new})",
+  "admin.stats.refresh": "🔄 Янгилаш"
 }

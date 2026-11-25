@@ -253,7 +253,7 @@ class WebApp:
         if tg_user is None or tg_user.is_bot or not -300 <= age <= INIT_DATA_MAX_AGE:
             raise denied
         full_name = " ".join(x for x in (tg_user.first_name, tg_user.last_name) if x)
-        user = await self.repo.touch_user(tg_user.id, tg_user.username, full_name)
+        user = await self.repo.touch_user(tg_user.id, tg_user.username, full_name, source="app")
         if user["lang"] is None:
             # Opened before choosing a language in the chat: follow the Telegram client language
             # for this request only — the bot will still ask once.

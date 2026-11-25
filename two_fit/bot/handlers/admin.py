@@ -185,8 +185,13 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
 
 async def render_stats(ctx: Ctx) -> tuple[str, InlineKeyboardMarkup]:
     s = await ctx.repo.stats()
-    return ctx.t("admin.stats", **{**s, "fees": fmt_money(s["fees"])}), kb(
-        [btn(ctx.t("admin.btn.home"), A("home"))]
+    v = await ctx.repo.visit_stats(exclude=ctx.cfg.admin_ids)  # the admins are not counted
+    days = "\n".join(ctx.t("admin.stats.day", day=fmt_date(d["day"])[:5], came=d["came"], new=d["new"]) for d in v["days"])
+    visits = ctx.t("admin.stats.visits", **{k: x for k, x in v.items() if k not in ("days", "since")}, days=days,
+                   since=fmt_date(v["since"]) if v["since"] else "—")
+    return ctx.t("admin.stats", **{**s, "fees": fmt_money(s["fees"])}) + "\n\n" + visits, kb(
+        [btn(ctx.t("admin.stats.refresh"), A("stats"))],
+        [btn(ctx.t("admin.btn.home"), A("home"))],
     )
 
 
