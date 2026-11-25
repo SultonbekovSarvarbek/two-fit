@@ -1,8 +1,11 @@
 """Price advice for sellers and the 1Fit price watcher."""
+import asyncio
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 import pytest
 
+from two_fit import price_watch
 from two_fit.price_watch import PENDING_KEY, PriceError, PriceWatcher, next_run, parse_prices, parse_times
 from two_fit.pricing import DEFAULT_FIT_PRICES, advise
 from two_fit.repo import TZ, Repo, today_local
@@ -89,13 +92,18 @@ async def walk_to_price(h, days=200):
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, (today_local() + timedelta(days=days)).strftime("%d.%m.%Y"))
     await h.click(SELLER, "sl:pay:full")
-    return await h.click(SELLER, "sl:freeze:no")
+    await h.click(SELLER, "sl:freeze:no")
+    return await h.click(SELLER, "sl:bonus:0")
 
 
-async def test_bot_asks_the_price_without_suggesting_one(h):
+async def test_bot_suggests_a_price_and_the_seller_may_take_it(h):
+    a = advise((today_local() + timedelta(days=200)).isoformat(), today_local())
     ask = texts(await walk_to_price(h))
-    assert "Рекомендуемая цена" not in ask and "1Fit" not in ask
-    assert not [b for c in h.to(SELLER)[-1:] for b in buttons_of(c) if "Поставить" in b.text]
+    assert "Рекомендуемая цена" in ask and "1Fit" in ask and "или напишите свою" in ask and "нельзя" not in ask
+    cb = h.button(SELLER, "Поставить")
+    assert cb == f"sl:advice:{a.recommended}"
+    assert "Цена: <b>" in texts(await h.click(SELLER, cb))
+    assert (await h.dp.storage.get_data(key=_key(h)))["draft"]["price"] == a.recommended
 
 
 async def test_bot_takes_any_price_the_seller_sets(h):
@@ -192,15 +200,30 @@ async def test_watcher_same_prices_stay_quiet(h):
     assert (await h.repo.last_price_checks(1))[0]["status"] == "ok"
 
 
-async def test_watcher_announces_new_prices_once_and_admin_applies_them(h):
-    dearer = {"result": [dict(x, price_with_discount=8_490_000) if x["days"] == 365 else x
-                         for x in FIT_ANSWER["result"]]}
+def with_year(price: int) -> dict:
+    """1Fit's answer with another price of the 12-month tariff."""
+    return {"result": [dict(x, price_with_discount=price) if x["days"] == 365 else x for x in FIT_ANSWER["result"]]}
+
+
+async def test_watcher_takes_an_ordinary_change_at_once(h):
+    w = watcher(h, [with_year(8_490_000)])
+    result = await w.check()
+    assert result["status"] == "applied"
+    assert h.repo.fit_prices[365] == 8_490_000  # sellers get today's price without waiting for an admin
+    msg = h.texts_to(ADMIN)
+    assert "бот уже считает" in msg and "7\xa0890\xa0000 → <b>8\xa0490\xa0000</b>" in msg and "+7,6%" in msg
+    assert "Обновить цены в боте" not in str(h.session.calls[-1])
+    assert (await h.repo.last_price_checks(1))[0]["status"] == "applied"
+
+
+async def test_watcher_announces_a_big_jump_once_and_admin_applies_it(h):
+    dearer = with_year(11_490_000)  # +45.6%: rather a misread than a real price, an admin decides
     w = watcher(h, [dearer, dearer])
     assert (await w.check())["status"] == "changed"
     msg = h.texts_to(ADMIN)
-    assert "1Fit изменил цены" in msg and "7\xa0890\xa0000 → <b>8\xa0490\xa0000</b>" in msg and "+7,6%" in msg
+    assert "Обновить цены в боте?" in msg and "7\xa0890\xa0000 → <b>11\xa0490\xa0000</b>" in msg and "+45,6%" in msg
     await w.check()
-    assert h.texts_to(ADMIN).count("1Fit изменил цены") == 1  # not five times a day
+    assert h.texts_to(ADMIN).count("Обновить цены в боте?") == 1  # not five times a day
     assert h.repo.fit_prices[365] == 7_890_000  # nothing changes on its own
 
     await h.send(ADMIN, "/start")
@@ -208,13 +231,13 @@ async def test_watcher_announces_new_prices_once_and_admin_applies_them(h):
     apply_cb = h.button(ADMIN, "Обновить цены")
     done = await h.click(ADMIN, apply_cb)
     assert any("Цены обновлены" in a for a in alerts(done))
-    assert h.repo.fit_prices[365] == 8_490_000 and await h.repo.get_setting(PENDING_KEY) is None
+    assert h.repo.fit_prices[365] == 11_490_000 and await h.repo.get_setting(PENDING_KEY) is None
     assert any("Эти цены уже неактуальны" in a for a in alerts(await h.click(ADMIN, apply_cb)))  # no double apply
 
     # The new prices survive a restart
     again = Repo(h.cfg.db_path)
     await again.connect()
-    assert again.fit_prices[365] == 8_490_000
+    assert again.fit_prices[365] == 11_490_000
     await again.close()
 
 
@@ -343,7 +366,8 @@ async def test_auto_price_in_the_bot(tmp_path):
         await h.click(SELLER, "sl:plan:365")
         await h.send(SELLER, end.strftime("%d.%m.%Y"))
         await h.click(SELLER, "sl:pay:full")
-        nxt = texts(await h.click(SELLER, "sl:freeze:no"))
+        await h.click(SELLER, "sl:freeze:no")
+        nxt = texts(await h.click(SELLER, "sl:bonus:0"))
         assert "Шаг 6/8" in nxt and "описание" in nxt  # no price question: straight to the description
         await h.click(SELLER, "sl:skip:")
         await h.click(SELLER, "sl:skip:")
@@ -547,3 +571,126 @@ async def test_installment_price_follows_the_payments_left(h):
                                    price=700_000, price_auto=False)
     await h.repo.reprice(today_local() + timedelta(days=31))
     assert (await h.repo.get_listing(typed))["price"] == 700_000
+
+
+# ------------------------------------------------------------------ fresh prices for every listing
+def live(h, answers, calls):
+    w = watcher(h, answers)
+    w.cfg = replace(h.cfg, fit_watch=True)
+    inner = w._fetch
+
+    async def counted():
+        calls.append(1)
+        return await inner()
+    w._fetch = counted
+    return w
+
+
+async def test_prices_are_read_again_before_a_seller_lists(h, monkeypatch):
+    calls = []
+    w = live(h, [with_year(8_490_000), PriceError("HTTP 500"), FIT_ANSWER], calls)
+    await w.refresh()
+    assert h.repo.fit_prices[365] == 8_490_000 and len(calls) == 1
+    await w.refresh()
+    assert len(calls) == 1  # read a moment ago: not again for every seller
+
+    monkeypatch.setattr(price_watch, "LIVE_TTL", 0)
+    await w.refresh()  # 1Fit does not answer: the stored prices stay, nobody is told about one miss
+    assert h.repo.fit_prices[365] == 8_490_000 and len(calls) == 2
+    assert "не получается прочитать" not in h.texts_to(ADMIN)
+    await w.refresh()
+    assert h.repo.fit_prices[365] == 7_890_000
+
+
+async def test_slow_1fit_does_not_hold_the_seller(h, monkeypatch):
+    async def slow():
+        await asyncio.sleep(5)
+        return with_year(8_490_000)
+    w = PriceWatcher(h.repo, h.dp["price_watcher"].i18n, replace(h.cfg, fit_watch=True), h.dp["notifier"], fetch=slow)
+    monkeypatch.setattr(price_watch, "LIVE_TIMEOUT", 0.05)
+    await w.refresh()
+    assert h.repo.fit_prices == DEFAULT_FIT_PRICES
+
+
+async def test_mini_app_listing_is_priced_from_todays_1fit_prices(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from two_fit.i18n import I18n
+    from two_fit.webapp.server import create_webapp
+
+    from .test_webapp import END
+
+    h = await Harness(tmp_path / "fresh.db", auto_price=True).start()
+    try:
+        calls = []
+        w = live(h, [with_year(8_490_000)], calls)
+        new = {**DEFAULT_FIT_PRICES, 365: 8_490_000}
+        async with TestClient(TestServer(create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"], w))) as client:
+            api = Api(client, h.cfg.bot_token)
+            status, made = await api.call("POST", "/api/listings", SELLER, draft())
+            assert status == 201, made
+            a = advise(END, today_local(), new, plan_days=365)
+            assert (await h.repo.get_listing(made["id"]))["price"] == a.recommended
+            assert calls == [1]
+    finally:
+        await h.stop()
+
+
+# ------------------------------------------------------------------ 1Fit bonus days
+async def test_bonus_days_come_on_top_in_the_mini_app(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from two_fit.i18n import I18n
+    from two_fit.webapp.server import create_webapp
+
+    h = await Harness(tmp_path / "bonus.db", auto_price=True).start()
+    try:
+        async with TestClient(TestServer(create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"]))) as client:
+            api = Api(client, h.cfg.bot_token)
+            card = (today_local() + timedelta(days=150)).isoformat()  # «150 days left» on the 1Fit card
+            real = (today_local() + timedelta(days=180)).isoformat()  # + 30 bonus days after it
+            _, adv = await api.call("POST", "/api/advice", SELLER,
+                                    {"end_date": card, "bonus_days": 30, "paid_in_full": True, "tariff_days": 365})
+            a = advise(real, today_local(), plan_days=365)
+            assert adv["advice"]["days_left"] == 180 and adv["advice"]["recommended"] == a.recommended == 5_000_000
+
+            status, made = await api.call("POST", "/api/listings", SELLER, draft(end_date=card, bonus_days=30))
+            assert status == 201, made
+            listing = await h.repo.get_listing(made["id"])
+            assert (listing["end_date"], listing["bonus_days"], listing["price"]) == (real, 30, 5_000_000)
+
+            _, mine = await api.call("GET", "/api/my", SELLER)
+            item = mine["items"][0]
+            assert (item["end_date"], item["card_end_date"], item["bonus_days"]) == (real, card, 30)
+            # edited without touching the dates: the bonus is not added twice
+            status, _ = await api.call("PUT", f"/api/listings/{made['id']}", SELLER,
+                                       draft(end_date=card, bonus_days=30, screenshots=[]))
+            assert status == 200
+            assert (await h.repo.get_listing(made["id"]))["end_date"] == real
+            assert (await api.call("POST", "/api/listings", SELLER, draft(bonus_days="много")))[0] == 400
+    finally:
+        await h.stop()
+
+
+async def test_bonus_days_in_the_bot(h):
+    card = today_local() + timedelta(days=150)
+    await h.send(SELLER, "/start")
+    await h.click(SELLER, "lang:ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:city:tashkent")
+    await h.click(SELLER, "sl:plan:365")
+    await h.send(SELLER, card.strftime("%d.%m.%Y"))
+    await h.click(SELLER, "sl:pay:full")
+    assert "Бонусные дни" in texts(await h.click(SELLER, "sl:freeze:no"))
+    assert "от 0 до 365" in texts(await h.send(SELLER, "много"))
+    await h.send(SELLER, "30")
+    await h.send(SELLER, "5 000 000")
+    await h.click(SELLER, "sl:skip:")
+    await h.click(SELLER, "sl:skip:")
+    await h.send(SELLER, "Алишер")
+    preview = texts(await h.send(SELLER, contact="+998901112233"))
+    assert "Включая 30 бонусных дн." in preview and "<b>6 мес.</b>" in preview
+    await h.click(SELLER, "sl:send:")
+    listing = (await h.repo.seller_listings(SELLER, 5, 0))[0][0]
+    assert (listing["end_date"], listing["bonus_days"]) == ((card + timedelta(days=30)).isoformat(), 30)

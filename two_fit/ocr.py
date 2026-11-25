@@ -1,4 +1,4 @@
-"""Reading a 1Fit membership screenshot: the end date, the tariff and the freeze days left.
+"""Reading a 1Fit membership screenshot: the end date, the tariff, the freeze days and the bonus days left.
 
 Tesseract does the reading (``pytesseract`` + the ``tesseract`` program with the rus/uzb_cyrl languages).
 Without them nothing breaks: ``read_words`` returns ``None`` and the listing is checked by the admin's eyes only.
@@ -46,6 +46,8 @@ _DAYS_LEFT = re.compile(r"(?<!\d)(\d{1,4})\s*(?:days?\s+left|дн\w*\s+оста�
 _START_WORDS = re.compile(r"(\bс\b|начал|актив|купл|покупк|бошлан|фаол)", re.I)
 _PLAN = re.compile(r"(?<!\d)(6|12|24)\s*(месяц\w*|мес\.?|ой\w*|months?|oy\w*)", re.I)
 _PLAN_DAYS = re.compile(r"(?<!\d)(180|365|730)\s*(дн\w*|кун\w*|days?|kun\w*)", re.I)  # «for 365 days»
+# «Бонусные дни / B 60 дней», «Bonusli kunlar / B 60 kun»: given after the main membership, not in its end date
+_BONUS_LINE = re.compile(r"(бонус\w*|bonus\w*)", re.I)
 _FREEZE_LINE = re.compile(r"(заморо\w*|музлат\w*|freez\w*|muzlat\w*)", re.I)
 _DAYS = re.compile(r"(?<!\d)(\d{1,3})\s*(дн\w*|день|дня|кун\w*|days?|kun\w*)", re.I)
 # «100 / 100» of the Attendance tile next to Freezing; Tesseract may read the slash as «|», «I», «l» or «\\»
@@ -197,6 +199,16 @@ def parse_card(text: str | None, today: date) -> dict[str, Any]:
         if n and 0 < n <= 365:
             result["freeze_days"] = n
             break
+
+    for i, line in enumerate(lines):
+        m = _BONUS_LINE.search(line)
+        if not m:
+            continue
+        # «Bonusli kunlar» has the word «kun» in it: only a number followed by «days» counts, on this line or the next
+        d = _DAYS.search(" ".join(lines[i:i + 2])[m.end():])
+        if d and 0 < int(d.group(1)) <= 365:  # «0 days»: nothing to add, nothing to compare
+            result["bonus_days"] = int(d.group(1))
+            break
     return result
 
 
@@ -210,12 +222,12 @@ def merge(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def mismatches(read: dict[str, Any], listing: dict[str, Any]) -> list[str]:
-    """Fields where the screenshot and the listing disagree: «end_date», «tariff_days», «freeze_days»,
+    """Fields where the screenshot and the listing disagree: «end_date», «tariff_days», «freeze_days», «bonus_days»,
     and «installment» when the seller says «paid in full» next to an installment contract."""
     out = []
     if read.get("installment") and listing.get("paid_in_full"):
         out.append("installment")
-    for key in ("end_date", "tariff_days", "freeze_days"):
+    for key in ("end_date", "tariff_days", "freeze_days", "bonus_days"):
         if read.get(key) is None or listing.get(key) is None:
             continue
         if key == "end_date":

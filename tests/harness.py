@@ -67,7 +67,7 @@ class Harness:
             db_path=db_path, commission_percent=10, page_size=5,
             welcome_image=db_path.parent / "missing.png", logo=db_path.parent / "missing-logo.png",
             promo_enabled=promo, auto_price=auto_price, screenshot_required=screenshot_required,
-            listing_fee=fee, payment_token=payment_token,
+            listing_fee=fee, payment_token=payment_token, fit_watch=False,
         )
         self.update_id = itertools.count(1)
 

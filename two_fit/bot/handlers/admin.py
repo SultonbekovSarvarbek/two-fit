@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InputMediaPhoto, 
 from ...money import fmt_money
 from ... import ocr
 from ...repo import LS, Repo, RepoError
+from ...usage import card_end
 from ...validators import clean_text
 from ..callbacks import AdmCb, FitPriceCb
 from ..context import Ctx
@@ -111,6 +112,8 @@ def screen_check(ctx: Ctx, listing: dict) -> list[str]:
         parts.append(ctx.t("sell.screen.tariff_days") + " " + ctx.t(f"app.plan.short.{read['tariff_days']}"))
     if read.get("freeze_days"):
         parts.append(ctx.t("sell.screen.freeze_days") + " " + ctx.t("app.freeze_row", days=read["freeze_days"]))
+    if read.get("bonus_days"):
+        parts.append(ctx.t("sell.screen.bonus_days") + " " + ctx.t("app.bonus_row", days=read["bonus_days"]))
     if read.get("start_date"):
         parts.append(ctx.t("app.f.start").lower() + " " + fmt_date(read["start_date"]))
     if read.get("installment"):
@@ -121,7 +124,7 @@ def screen_check(ctx: Ctx, listing: dict) -> list[str]:
         parts.append(ctx.t("admin.card.ocr_payments", monthly=fmt_money(read.get("monthly_payment") or 0),
                            left=read["payments_left"]))
     lines = [ctx.t("admin.card.ocr", read=" · ".join(parts))]
-    diff = ocr.mismatches(read, {**listing, "freeze_days": listing["freeze_days"] or 0})
+    diff = ocr.mismatches(read, {**listing, "freeze_days": listing["freeze_days"] or 0, "end_date": card_end(listing)})
     if diff:
         lines.append(ctx.t("admin.card.ocr_diff", fields=", ".join(ctx.t(f"sell.screen.{k}") for k in diff)))
     return lines

@@ -35,6 +35,7 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     await h.send(uid, START)
     await h.click(uid, "sl:pay:full")
     await h.click(uid, "sl:freeze:no")
+    await h.click(uid, "sl:bonus:0")
     calc = await h.send(uid, price)
     assert "Нарх: <b>2\xa0000\xa0000 сўм" in texts(calc) and "комиссия" not in texts(calc).lower()
     await h.send(uid, "Қолган 7 ой, зал яқин")
@@ -114,12 +115,18 @@ async def test_full_happy_path(h):
     assert "Найдено: 1" in texts(await h.click(BUYER, "cat:0:tashkent"))
     assert "В городе Бухара пока нет" in texts(await h.click(BUYER, "cat:0:bukhara"))
 
-    # --- the seller sold it: gone from the catalog
-    await h.click(SELLER, "my:sold:1:0")
+    # --- the seller sold it: the admin hears, buyers see «Sold» for a week without the contacts
+    assert "7 кун" in texts(await h.click(SELLER, "my:sold:1:0"))
     sold = await h.click(SELLER, "my:sold!:1:0")
-    assert "каталогдан олинди" in texts(sold)
+    assert "сотилди деб белгиланди" in texts(sold)
+    assert "отметил объявление №1 как проданное" in h.texts_to(ADMIN) and "Открыли контакты: 1" in h.texts_to(ADMIN)
     assert (await h.repo.get_listing(1))["status"] == LS.SOLD
-    assert "Пока нет" in texts(await h.send(BUYER, "🏋️ Все абонементы"))
+    listed = await h.send(BUYER, "🏋️ Все абонементы")
+    assert any(b.text.endswith("сум · ✅ ПРОДАНО") for c in listed for b in buttons_of(c))
+    card = texts(await h.click(BUYER, "card:1:0:"))
+    assert "Продано" in card and "+998" not in card and "tg://" not in card
+    await h.repo.db.execute("UPDATE listings SET sale_reported_at='2020-01-01T00:00:00+00:00' WHERE id=1")
+    assert "Пока нет" in texts(await h.send(BUYER, "🏋️ Все абонементы"))  # a week later it is gone
     assert any("недоступно" in a for a in alerts(await h.click(BUYER, "card:1:0:")))
     stats = texts(await h.click(ADMIN, "ad:stats:0:0:"))
     assert "Продано: 1" in stats and "Оплат размещения: 0" in stats
@@ -212,6 +219,7 @@ async def test_wizard_navigation_and_validation(h):
     assert "Как оплачен абонемент" in texts(await h.send(SELLER, END))  # no start date question any more
     await h.click(SELLER, "sl:pay:full")
     await h.click(SELLER, "sl:freeze:no")
+    await h.click(SELLER, "sl:bonus:0")
     assert "цифрами" in texts(await h.send(SELLER, "дорого"))
     await h.send(SELLER, "3000000")
     assert "контакты" in texts(await h.send(SELLER, "пишите @alisher_fit"))
@@ -321,11 +329,11 @@ async def test_installment_wizard_and_card(h):
     assert "Шаг 5/8" in after_left  # then the freeze question; one step fewer
     assert "Сколько дней" in texts(await h.click(SELLER, "sl:freeze:yes"))
     assert "от 1 до 365" in texts(await h.send(SELLER, "0"))
-    ask_desc = texts(await h.send(SELLER, "20"))
+    assert "бонусные дни" in texts(await h.send(SELLER, "20"))
+    ask_desc = texts(await h.click(SELLER, "sl:bonus:0"))
     assert "описание" in ask_desc.lower() and "Цена продажи" not in ask_desc  # straight past the price
-    assert "заморозки" in texts(await h.click(SELLER, "sl:back:"))  # back skips the price too
-    await h.click(SELLER, "sl:freeze:yes")
-    await h.send(SELLER, "20")
+    assert "бонусные дни" in texts(await h.click(SELLER, "sl:back:"))  # back skips the price too
+    await h.click(SELLER, "sl:bonus:0")
     await h.click(SELLER, "sl:skip:")
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, "Алишер")
@@ -361,8 +369,10 @@ async def test_fully_paid_skips_installment_questions(h):
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, END)
     assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:pay:full"))
-    ask_price = texts(await h.click(SELLER, "sl:freeze:no"))
+    assert "бонусные дни" in texts(await h.click(SELLER, "sl:freeze:no"))
+    ask_price = texts(await h.click(SELLER, "sl:bonus:0"))
     assert "Шаг 6/9" in ask_price and "больше он ничего не доплачивает" in ask_price
+    assert "бонусные дни" in texts(await h.click(SELLER, "sl:back:"))  # back to the bonus days
     assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:back:"))  # back to the freeze question
     assert "Шаг 4/9" in texts(await h.click(SELLER, "sl:back:"))  # then the payment, skipping installments
 
@@ -402,6 +412,7 @@ async def test_preview_says_what_the_seller_gives(h):
     await h.send(SELLER, END)
     await h.click(SELLER, "sl:pay:full")
     await h.click(SELLER, "sl:freeze:no")
+    await h.click(SELLER, "sl:bonus:0")
     await h.send(SELLER, "2 000 000")
     await h.click(SELLER, "sl:skip:")
     await h.click(SELLER, "sl:skip:")

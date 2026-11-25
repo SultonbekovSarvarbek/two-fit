@@ -14,7 +14,7 @@ from typing import Any
 import aiosqlite
 
 from .pricing import advise, normalize_prices
-from .usage import DAYS_PER_MONTH
+from .usage import DAYS_PER_MONTH, with_bonus
 from .validators import TARIFF_PLANS
 
 # Uzbekistan has no DST: UTC+5 all year round.
@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS listings (
     payments_left             INTEGER,            -- installment: how many of those payments are left
     tariff_days               INTEGER,            -- membership: the 1Fit tariff, 180 / 365 / 730 days; NULL on old listings
     freeze_days               INTEGER,            -- membership: unused freeze days (0 = none); NULL on old listings
+    bonus_days                INTEGER NOT NULL DEFAULT 0,  -- membership: 1Fit bonus days, already added to end_date
     price_auto                INTEGER NOT NULL DEFAULT 0,  -- 1: the recommended price, lowered every day as days pass
     payments_as_of            TEXT,               -- YYYY-MM-DD: the day payments_left was true; one fewer each month after
     screenshots               TEXT,               -- JSON list of up to 3 Telegram file ids (the first is screenshot_file_id)
@@ -282,6 +283,8 @@ class Repo:
         for column in ("tariff_days", "freeze_days"):
             if column not in columns:
                 await self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} INTEGER")
+        if "bonus_days" not in columns:
+            await self.db.execute("ALTER TABLE listings ADD COLUMN bonus_days INTEGER NOT NULL DEFAULT 0")
         if "price_auto" not in columns:
             await self.db.execute("ALTER TABLE listings ADD COLUMN price_auto INTEGER NOT NULL DEFAULT 0")
         if "payments_as_of" not in columns:
@@ -428,6 +431,15 @@ class Repo:
             raise RepoError("incomplete")
 
     @staticmethod
+    def _bonus(draft: dict[str, Any]) -> int:
+        return int(draft.get("bonus_days") or 0) if draft.get("kind") != LK.PROMO else 0
+
+    @staticmethod
+    def _end(draft: dict[str, Any]) -> str:
+        """A draft has the end date from the 1Fit card; the listing keeps the real one, the bonus days after it."""
+        return with_bonus(draft["end_date"], Repo._bonus(draft))
+
+    @staticmethod
     def _tariff(draft: dict[str, Any]) -> str:
         """Only a promo code says what it gives; a membership shows the months left instead of a tariff name."""
         return draft.get("tariff") or "" if draft.get("kind") == LK.PROMO else ""
@@ -507,15 +519,15 @@ class Repo:
                        paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
                        commission_percent, price_auto, payments_as_of, screenshots, ocr, status, created_at, updated_at,
-                       fee_amount)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       fee_amount, bonus_days)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    seller_id, lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft),
+                    seller_id, lang, draft["city"], self._tariff(draft), self._end(draft), *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", self._shots(draft)[0],
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
                     self.percent_for(draft.get("kind")), *self._auto_fields(draft), *self._shots(draft)[1:],
-                    LS.UNPAID if fee > 0 else LS.PENDING, ts, ts, fee if fee > 0 else None,
+                    LS.UNPAID if fee > 0 else LS.PENDING, ts, ts, fee if fee > 0 else None, self._bonus(draft),
                 ),
             )
             listing_id = cur.lastrowid
@@ -536,15 +548,16 @@ class Repo:
                 """UPDATE listings SET lang=?, city=?, tariff=?, end_date=?, kind=?, promo_code=?, tariff_days=?, freeze_days=?, start_date=?,
                        paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?, commission_percent=?,
-                       price_auto=?, payments_as_of=?, screenshots=?, ocr=?, status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?
+                       price_auto=?, payments_as_of=?, screenshots=?, ocr=?, status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?,
+                       bonus_days=?
                    WHERE id=?""",
                 (
-                    lang, draft["city"], self._tariff(draft), draft["end_date"], *self._kind_fields(draft), draft["price"],
+                    lang, draft["city"], self._tariff(draft), self._end(draft), *self._kind_fields(draft), draft["price"],
                     int(bool(draft.get("price_negotiable"))),
                     draft.get("description") or "", self._shots(draft)[0],
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
                     self.percent_for(draft.get("kind")), *self._auto_fields(draft), *self._shots(draft)[1:],
-                    status, now_iso(), listing_id,
+                    status, now_iso(), self._bonus(draft), listing_id,
                 ),
             )
             await self._log(listing_id, seller_id, "edited", price=draft["price"])
@@ -712,17 +725,31 @@ class Repo:
             "SELECT * FROM payme_transactions WHERE payme_time BETWEEN ? AND ? ORDER BY payme_time", (start, end))
 
     # ---------------------------------------------------------------- catalog
+    SOLD_SHOWN_DAYS = 7  # a sold listing stays in the catalog this long, marked «Sold», without contacts
+
+    @classmethod
+    def _sold_since(cls) -> str:
+        return (datetime.now(timezone.utc) - timedelta(days=cls.SOLD_SHOWN_DAYS)).isoformat(timespec="seconds")
+
+    def is_sold_shown(self, listing: dict[str, Any] | None) -> bool:
+        """Sold lately: buyers still see it in the catalog with the «Sold» badge (2FIT works), but cannot reach the seller."""
+        return (bool(listing) and listing["status"] == LS.SOLD and (listing["sale_reported_at"] or "") >= self._sold_since()
+                and (self.promo_enabled or listing["kind"] != LK.PROMO))
+
     async def catalog(self, city: str | None, limit: int, offset: int,
                       today: date | None = None) -> tuple[list[dict[str, Any]], int]:
-        params: dict[str, Any] = {"st": LS.APPROVED, "today": (today or today_local()).isoformat()}
-        where = "status=:st AND end_date>=:today" + self._kind_filter()
+        params: dict[str, Any] = {"st": LS.APPROVED, "today": (today or today_local()).isoformat(),
+                                  "sold": LS.SOLD, "since": self._sold_since()}
+        where = ("((status=:st AND end_date>=:today) OR (status=:sold AND sale_reported_at>=:since))"
+                 + self._kind_filter())
         if city:
             where += " AND city=:city"
             params["city"] = city
         total = await self._scalar(f"SELECT COUNT(*) FROM listings WHERE {where}", params)
         rows = await self._all(
             # cheapest first, by the price buyers see: installments cost monthly × payments left
-            f"SELECT * FROM listings WHERE {where} ORDER BY {SHOWN_PRICE} ASC, published_at DESC, id DESC"
+            # the sold ones after everything on sale
+            f"SELECT * FROM listings WHERE {where} ORDER BY status=:sold, {SHOWN_PRICE} ASC, published_at DESC, id DESC"
             " LIMIT :lim OFFSET :off",
             {**params, "lim": limit, "off": offset},
         )

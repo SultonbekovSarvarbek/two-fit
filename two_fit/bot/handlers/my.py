@@ -148,6 +148,11 @@ async def on_my(call: CallbackQuery, callback_data: MyCb, state: FSMContext, ctx
             await call.answer(ctx.t("my.cant_sold"), show_alert=True)
             return
         await call.answer()
+        counts = await ctx.repo.contact_counts(lid)
+        await notifier.admins(ctx, lambda adm: (
+            adm.t("admin.n.sold", id=lid, **counts),
+            kb([btn(adm.t("admin.open_btn", id=lid), AdmCb(action="open", id=lid))]),
+        ))
         await _edit(call, ctx.t("my.sold_done", id=lid), kb(
             [btn(ctx.t("common.back"), MyCb(action="list", page=page))]
         ))

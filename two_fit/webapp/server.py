@@ -28,12 +28,13 @@ from ..bot.ui import btn, kb, price_advice
 from ..config import Config
 from .. import ocr
 from ..payme import Payme
+from ..price_watch import PriceWatcher
 from ..money import round_k
 from ..ocr import MAX_SCREENSHOTS
 from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
 from ..pricing import DISCOUNT_PERCENT, advise
-from ..usage import remaining, usage
+from ..usage import card_end, remaining, usage
 from ..validators import (
     DESC_MAX,
     MAX_YEARS_AHEAD,
@@ -50,6 +51,7 @@ from ..validators import (
     normalize_phone,
     parse_description,
     parse_end_date,
+    parse_bonus_days,
     parse_freeze_days,
     parse_monthly,
     parse_payments_left,
@@ -118,9 +120,13 @@ def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = Non
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["kind"] = listing["kind"]  # the promo code itself is never public
+    view["sold"] = listing["status"] == LS.SOLD  # shown a few days with the «Sold» badge, never with contacts
     view["tariff_days"] = listing["tariff_days"]  # 180 / 365 / 730, None on old listings
     view["freeze_days"] = listing["freeze_days"]  # unused freeze days the buyer gets; 0 none, None not asked
-    view["usage"] = usage(listing["start_date"], listing["end_date"], today_local(), listing["tariff_days"])
+    view["bonus_days"] = listing["bonus_days"] or 0  # 1Fit bonus days, already in end_date
+    view["card_end_date"] = card_end(listing)       # the end date on the 1Fit card, without them
+    # the tariff counts from the card's end: bonus days are not part of it
+    view["usage"] = usage(listing["start_date"], view["card_end_date"], today_local(), listing["tariff_days"])
     view["left"] = remaining(listing["end_date"], today_local())
     # Buyers never see the installments, only the whole sum they pay: the price plus the payments still due to 1Fit
     view["price_total"] = price_total(listing)
@@ -155,8 +161,11 @@ def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
 
 
 class WebApp:
-    def __init__(self, repo: Repo, i18n: I18n, cfg: Config, bot: Bot, notifier: Notifier):
+    def __init__(self, repo: Repo, i18n: I18n, cfg: Config, bot: Bot, notifier: Notifier,
+                 prices: PriceWatcher | None = None):
         self.repo, self.i18n, self.cfg, self.bot, self.notifier = repo, i18n, cfg, bot, notifier
+        # 1Fit's prices are read again before a seller's price is worked out
+        self.prices = prices or PriceWatcher(repo, i18n, cfg, notifier)
         self.ocr_on = ocr.available()  # Tesseract installed? Without it screenshots are only looked at by the admin
         if not self.ocr_on:
             log.info("Tesseract is not installed: screenshots are not read automatically")
@@ -293,6 +302,7 @@ class WebApp:
         }
 
     async def bootstrap(self, request: web.Request) -> web.Response:
+        self.prices.refresh_soon()  # the seller may be about to list: today's 1Fit prices get ready
         return web.json_response(self._bootstrap(request[CTX]))
 
     async def set_lang(self, request: web.Request) -> web.Response:
@@ -330,6 +340,8 @@ class WebApp:
         listing = await self.repo.get_listing(listing_id)
         if listing and listing["seller_id"] == ctx.user_id:
             return web.json_response({"listing": own_view(ctx, listing), "own": True})
+        if self.repo.is_sold_shown(listing):  # still in the list as «Sold»: the seller is no longer reachable
+            return web.json_response({"listing": public_view(listing, self.repo.fit_prices), "own": False})
         if not self.repo.is_available(listing):
             raise ApiError(404, "not_available", ctx.t("common.not_available"))
         view = public_view(listing, self.repo.fit_prices)
@@ -451,6 +463,13 @@ class WebApp:
         return (self._field(ctx, "name", parse_name, body.get("name")),
                 self._field(ctx, "phone", normalize_phone, body.get("phone")))
 
+    def _bonus(self, ctx: Ctx, body: dict[str, Any]) -> int:
+        """1Fit bonus days, turned on after the main membership: they come on top of the card's end date."""
+        bonus = body.get("bonus_days")
+        if bonus in (None, 0, "", "0"):
+            return 0
+        return self._field(ctx, "bonus_days", parse_bonus_days, str(bonus) if isinstance(bonus, int) else bonus)
+
     def _membership_fields(self, ctx: Ctx, body: dict[str, Any], draft: dict[str, Any], number) -> None:
         """The 1Fit tariff, the start date and how the membership is paid: fully or in installments."""
         plan = body.get("tariff_days")
@@ -464,6 +483,7 @@ class WebApp:
         else:
             draft["freeze_days"] = self._field(ctx, "freeze_days", parse_freeze_days,
                                                str(freeze) if isinstance(freeze, int) else freeze)
+        draft["bonus_days"] = self._bonus(ctx, body)
         try:
             check_plan_end(date.fromisoformat(draft["end_date"]), today_local(), plan)
         except ValidationError as e:
@@ -487,6 +507,7 @@ class WebApp:
         """Recommended price for the sell form, from the end date and the installments typed so far.
         Half-filled forms are fine: anything not valid yet simply gives no advice."""
         ctx = request[CTX]
+        await self.prices.refresh()
         body = await self._json(request)
         try:
             end = self._iso_date(body.get("end_date"), today_local())
@@ -495,6 +516,10 @@ class WebApp:
         plan = body.get("tariff_days")
         draft: dict[str, Any] = {"kind": LK.MEMBERSHIP, "end_date": end, "paid_in_full": body.get("paid_in_full") is not False,
                                  "tariff_days": plan if plan in TARIFF_PLANS else None}
+        try:
+            draft["bonus_days"] = self._bonus(ctx, body)
+        except ApiError:
+            return web.json_response({"advice": None})
         if not draft["paid_in_full"]:
             try:
                 draft["monthly_payment"] = parse_monthly(str(body.get("monthly_payment") or ""))
@@ -550,6 +575,7 @@ class WebApp:
 
     async def create(self, request: web.Request) -> web.Response:
         ctx = request[CTX]
+        await self.prices.refresh()
         draft = self._draft(ctx, await self._json(request))
         await self._add_reads(ctx, draft)
         fee = self.cfg.listing_fee if self.cfg.fee_enabled else 0
@@ -592,6 +618,7 @@ class WebApp:
         ctx = request[CTX]
         listing_id = int(request.match_info["id"])
         existing = await self._own(ctx, listing_id)
+        await self.prices.refresh()
         draft = self._draft(ctx, await self._json(request), existing)
         await self._add_reads(ctx, draft)
         try:
@@ -631,15 +658,18 @@ class WebApp:
             await self.repo.mark_sold(listing_id, ctx.user_id)
         except RepoError:
             raise ApiError(409, "bad_status", ctx.t("my.cant_sold")) from None
+        await self._notify_admins(ctx, "admin.n.sold", listing_id, **await self.repo.contact_counts(listing_id))
         return web.json_response({"listing": own_view(ctx, await self.repo.get_listing(listing_id))})
 
 
-def create_webapp(repo: Repo, i18n: I18n, cfg: Config, bot: Bot, notifier: Notifier) -> web.Application:
-    return WebApp(repo, i18n, cfg, bot, notifier).build()
+def create_webapp(repo: Repo, i18n: I18n, cfg: Config, bot: Bot, notifier: Notifier,
+                  prices: PriceWatcher | None = None) -> web.Application:
+    return WebApp(repo, i18n, cfg, bot, notifier, prices).build()
 
 
-async def start_webapp(repo: Repo, i18n: I18n, cfg: Config, bot: Bot, notifier: Notifier) -> web.AppRunner:
-    runner = web.AppRunner(create_webapp(repo, i18n, cfg, bot, notifier), access_log=None)
+async def start_webapp(repo: Repo, i18n: I18n, cfg: Config, bot: Bot, notifier: Notifier,
+                       prices: PriceWatcher | None = None) -> web.AppRunner:
+    runner = web.AppRunner(create_webapp(repo, i18n, cfg, bot, notifier, prices), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, cfg.webapp_host, cfg.webapp_port).start()
     log.info("web server on %s:%s (Mini App: %s, Payme: %s)", cfg.webapp_host, cfg.webapp_port,

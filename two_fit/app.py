@@ -108,7 +108,7 @@ async def run() -> None:
     await setup_bot_profile(bot, i18n, cfg)
     web_runner = None
     if cfg.webapp_enabled or cfg.payme_enabled:  # Payme calls POST /payme on the same server
-        web_runner = await start_webapp(repo, i18n, cfg, bot, dp["notifier"])
+        web_runner = await start_webapp(repo, i18n, cfg, bot, dp["notifier"], dp["price_watcher"])
     if cfg.webapp_url and not cfg.webapp_enabled:
         log.warning("WEBAPP_URL must start with https:// — the Mini App is off")
     reprice_task = asyncio.create_task(reprice_daily(repo))  # runs once now, then every night

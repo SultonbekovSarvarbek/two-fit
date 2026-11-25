@@ -63,6 +63,8 @@ async def on_prices(call: CallbackQuery, callback_data: FitPriceCb, ctx: Ctx, pr
         result = await price_watcher.check(notify=False)  # the admin sees the result right here
         if result["status"] == "ok":
             await call.message.answer(ctx.t("prices.same"))
+        elif result["status"] == "applied":
+            await call.message.answer(price_watcher.applied_message(ctx, result["changes"]))
         elif result["status"] == "error":
             await call.message.answer(ctx.t("prices.failed", error=result["error"][:200]))
     elif action == "apply":

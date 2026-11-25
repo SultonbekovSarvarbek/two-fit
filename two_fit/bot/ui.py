@@ -18,7 +18,7 @@ from ..i18n import LANGS
 from ..money import fmt_money, round_k
 from ..pricing import Advice, advise
 from ..repo import LS, TZ, Repo, today_local
-from ..usage import remaining, span
+from ..usage import remaining, span, with_bonus
 from .callbacks import NOOP, LangCb
 from .context import Ctx
 
@@ -146,6 +146,8 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
     )
     if data.get("price_negotiable"):
         text += ctx.t("card.negotiable")
+    if not promo and data.get("bonus_days"):
+        text += ctx.t("card.bonus", days=data["bonus_days"])
     if installments:
         text += payment_line(ctx, data)
     if data.get("description"):
@@ -154,12 +156,13 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
 
 
 def price_advice(ctx: Ctx, data: dict[str, Any]) -> Advice | None:
-    """Price advice for a membership listing or draft; None for a promo code or without an end date."""
+    """Price advice for a membership draft (end date from the 1Fit card); None for a promo code or without an end date."""
     if data.get("kind") == "promo" or not data.get("end_date"):
         return None
     # a stored listing has 0, a draft has False: both mean the buyer takes the installments over
     installment = data.get("paid_in_full") is not None and not data["paid_in_full"]
-    return advise(data["end_date"], today_local(), ctx.repo.fit_prices,
+    # a draft has the card's end date: the bonus days come after it
+    return advise(with_bonus(data["end_date"], data.get("bonus_days")), today_local(), ctx.repo.fit_prices,
                   data.get("monthly_payment") if installment else None,
                   data.get("payments_left") if installment else None, plan_days=data.get("tariff_days"))
 
@@ -173,7 +176,7 @@ def advice_text(ctx: Ctx, a: Advice) -> str:
                  saving=a.saving(a.recommended))
     if a.installments:
         text += ctx.t("advice.installment", total=fmt_money(a.installments))
-    return text + ctx.t("advice.max", max=fmt_money(a.max_price))
+    return text + ctx.t("advice.own")  # only a suggestion: any price of the seller's goes
 
 
 def buyer_total(data: dict[str, Any]) -> int:

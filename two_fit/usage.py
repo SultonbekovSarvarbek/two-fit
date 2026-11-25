@@ -8,6 +8,22 @@ DAYS_PER_MONTH = 30.4375
 MONTHS_FROM_DAYS = 60  # shorter memberships are counted in days
 
 
+def with_bonus(end_iso: str, bonus_days: int | None) -> str:
+    """The real last day: 1Fit turns the bonus days on after the main membership («Asosiy abonementdan keyin
+    faollashtiriladi»), so 271 days left + 60 bonus days give the buyer 331 days."""
+    if not bonus_days:
+        return end_iso
+    return (date.fromisoformat(end_iso) + timedelta(days=bonus_days)).isoformat()
+
+
+def card_end(listing: dict[str, Any]) -> str:
+    """The end date as the 1Fit card shows it («до 22 августа»): a stored listing keeps the real one, bonus included."""
+    bonus = listing.get("bonus_days") or 0
+    if not bonus:
+        return listing["end_date"]
+    return (date.fromisoformat(listing["end_date"]) - timedelta(days=bonus)).isoformat()
+
+
 def remaining(end_iso: str, today: date) -> dict[str, Any]:
     """What the buyer actually gets: «7 months» or «45 days» from today to the end date.
     It replaces the tariff name: «12 months» made buyers think they got all 12."""

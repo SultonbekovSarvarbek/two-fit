@@ -40,7 +40,8 @@ async def render_catalog(ctx: Ctx, page: int, city: str) -> tuple[str, InlineKey
     item_rows = [
         [btn(
             ctx.t("catalog.item", id=r["id"], city=ctx.i18n.city(ctx.lang, r["city"]), price=fmt_money(buyer_total(r)))
-            + (ctx.t("catalog.promo") if r["kind"] == "promo" else ""),
+            + (ctx.t("catalog.promo") if r["kind"] == "promo" else "")
+            + (ctx.t("catalog.sold") if r["status"] == "sold" else ""),
             CardCb(id=r["id"], page=page, city=city),
         )]
         for r in rows
@@ -95,6 +96,11 @@ def card_markup(ctx: Ctx, tg_row: list | None, page: int, city: str) -> InlineKe
 @router.callback_query(CardCb.filter())
 async def on_card(call: CallbackQuery, callback_data: CardCb, ctx: Ctx) -> None:
     listing = await ctx.repo.get_listing(callback_data.id)
+    if ctx.repo.is_sold_shown(listing):  # sold: the card without the seller's contacts
+        await call.answer()
+        text = ctx.t("catalog.sold_card") + "\n\n" + listing_public(ctx, listing, listing["id"])
+        await _edit(call, text, card_markup(ctx, None, callback_data.page, callback_data.city))
+        return
     if not ctx.repo.is_available(listing):
         await call.answer(ctx.t("common.not_available"), show_alert=True)
         text, markup = await render_catalog(ctx, callback_data.page, callback_data.city)

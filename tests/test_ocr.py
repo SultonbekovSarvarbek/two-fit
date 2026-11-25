@@ -125,6 +125,7 @@ async def test_bot_offers_the_values_read_off_the_screenshots(h, monkeypatch):
     await h.send(SELLER, end.strftime("%d.%m.%Y"))
     await h.click(SELLER, "sl:pay:full")
     await h.click(SELLER, "sl:freeze:no")
+    await h.click(SELLER, "sl:bonus:0")
     await h.send(SELLER, "2 000 000")
     await h.click(SELLER, "sl:skip:")
     await h.send(SELLER, photo=True)
@@ -216,6 +217,17 @@ def test_reads_the_real_english_card(text):
 def test_bonus_days_and_the_visit_limit_are_not_taken_for_anything():
     text = "Bonus days\n0 days\nYour visit limit will reset on November 27 at 00:00."
     assert parse_card(text, TODAY) == {}
+
+
+def test_bonus_days_come_after_the_main_membership():
+    """«Asosiy abonementdan keyin faollashtiriladi»: 271 days left until 22 August, then 60 bonus days."""
+    text = ("Shaxsiy abonement\n365 kun\n271 kun qoldi 22-avgust, 2027 gacha\n"
+            "Bir oylik tashriflar soni 20-dekabr soat 00:00 yangilanadi.\nBatafsilroq\n"
+            "Bonusli kunlar\nB 60 kun\nAsosiy abonementdan keyin faollashtiriladi\n"
+            "Davomat Muzlatish\n100 / 100 30\nIdeal kun qoldi")
+    assert parse_card(text, date(2026, 11, 24)) == {"end_date": "2027-08-22", "tariff_days": 365, "freeze_days": 30,
+                                                    "bonus_days": 60}
+    assert parse_card("Бонусные дни\nB 45 дней", TODAY)["bonus_days"] == 45
 
 
 def test_days_left_when_the_date_was_not_read():

@@ -200,7 +200,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
                              "description", "price_total", "kind", "left",
-                             "month_cost", "tariff_days", "freeze_days"}
+                             "month_cost", "tariff_days", "freeze_days", "bonus_days", "card_end_date", "sold"}
         # No start date, but the 12-month tariff gives it: «used 5 of 12 months» still shows.
         assert item["start_date"] is None and item["tariff_days"] == 365 and item["usage"]["total"] == 12
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
@@ -266,8 +266,13 @@ async def test_withdraw_and_sold(h, api):
     assert not data["listing"]["can_edit"]
     status, data = await api.call("POST", f"/api/listings/{sold}/sold", SELLER)
     assert (status, data["error"]) == (409, "bad_status")
-    status, _ = await api.call("GET", f"/api/listings/{sold}", BUYER)
+    assert "отметил объявление" in h.texts_to(ADMIN)
+    status, data = await api.call("GET", f"/api/listings/{sold}", BUYER)
+    assert status == 200 and data["listing"]["sold"] is True and "seller" not in data["listing"]
+    status, _ = await api.call("POST", f"/api/listings/{sold}/contact", BUYER, {"action": "call"})
     assert status == 404
+    _, cat = await api.call("GET", "/api/catalog", BUYER)
+    assert [(x["id"], x["sold"]) for x in cat["items"]] == [(sold, True)]
 
 
 async def test_listing_fee_in_the_mini_app(tmp_path):
@@ -544,6 +549,7 @@ async def test_bot_requires_the_screenshot(tmp_path):
         await h.send(SELLER, (tl() + td(days=200)).strftime("%d.%m.%Y"))
         await h.click(SELLER, "sl:pay:full")
         await h.click(SELLER, "sl:freeze:no")
+        await h.click(SELLER, "sl:bonus:0")
         await h.send(SELLER, "2 000 000")
         calls = await h.click(SELLER, "sl:skip:")  # no description: on to the screenshot
         ask = texts(calls)

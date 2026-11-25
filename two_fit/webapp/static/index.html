@@ -141,6 +141,9 @@ p { margin: 0; }
 .hero .badge.fixed { background: rgba(21, 21, 15, 0.1); color: var(--ink); }
 /* installment: the buyer keeps paying every month, so it must not look like the whole price */
 .badge.inst { background: var(--tint); color: var(--text); }
+/* sold lately: still in the list for a few days, dimmed, with a dark «Sold» badge and no contacts */
+.item.sold { opacity: 0.6; }
+.badge.sold { background: var(--ink); color: var(--lime); font-weight: 700; }
 .hero .inst-note { margin-top: 10px; font-size: 14px; font-weight: 500; }
 .field .seg { margin-top: 8px; background: var(--page); }
 .field[hidden], .card[hidden] { display: none; }
@@ -490,13 +493,14 @@ const splash = () => h("div", { class: "splash" }, logo(true), spinner());
 
 /* ---------------------------------------------------------------- catalog */
 function listingRow(l, onclick, extra) {
-  return h("button", { class: "card item", type: "button", onclick },
+  return h("button", { class: "card item" + (l.sold && !extra ? " sold" : ""), type: "button", onclick },
     h("div", { class: "main" },
       h("div", { class: "title" }, isPromo(l) ? l.tariff : leftText(l, "app.left_title")),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
-      extra || promoBadge(l)),  // negotiable and installments: on the listing itself
+      extra || (l.sold ? soldBadge() : promoBadge(l))),  // negotiable and installments: on the listing itself
     h("div", { class: "price num" }, money(buyerTotal(l)), h("small", null, T("app.sum"))));
 }
+const soldBadge = () => h("span", { class: "badge sold" }, "✅ " + T("app.sold_badge"));
 function cheapestFlag() {
   const flag = h("span", { class: "flag" }, T("app.badge.cheapest"));
   flag.insertAdjacentHTML("afterbegin", '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>');
@@ -513,6 +517,13 @@ const isPromo = (l) => l.kind === "promo";
 function leftFor(endIso) {
   const days = Math.max(0, Math.round((new Date(endIso) - new Date(new Date().toISOString().slice(0, 10))) / 864e5));
   return days >= 60 ? Math.max(1, Math.round(days / 30.4375)) + " " + T("app.unit.m") : days + " " + T("app.unit.d");
+}
+// The day after ``n`` more days: 1Fit bonus days start after the date on the card.
+function addDays(iso, n) {
+  if (!iso || !Number(n)) return iso;
+  const t = new Date(iso + "T00:00:00Z");
+  t.setUTCDate(t.getUTCDate() + Number(n));
+  return t.toISOString().slice(0, 10);
 }
 // «Проверьте объявление»: the seller confirms the summary before it goes to moderation.
 function confirmSheet(title, rows, okText, backText) {
@@ -563,7 +574,7 @@ function catalogView(view, rev) {
     : null;
   // «Cheapest»: the lowest price shown among the memberships loaded. A promo code is a different thing
   // and is naturally cheaper, so flagging it would mislead.
-  const memberships = c.items.filter((l) => !isPromo(l));
+  const memberships = c.items.filter((l) => !isPromo(l) && !l.sold);
   const best = memberships.length > 1
     ? memberships.reduce((a, b) => (buyerTotal(b) < buyerTotal(a) ? b : a)) : null;
   const rows = c.items.map((l) => {
@@ -583,6 +594,8 @@ function publicRows(l) {
     h("div", null, h("span", { class: "k" }, T(isPromo(l) ? "app.f.date_promo" : "app.f.date")), h("span", { class: "v num" }, dmy(l.end_date))),
     l.freeze_days ? h("div", null, h("span", { class: "k" }, "❄️ " + T("app.f.freeze_short")),
       h("span", { class: "v num" }, T("app.freeze_row", { days: l.freeze_days }))) : null,
+    !isPromo(l) && l.bonus_days ? h("div", null, h("span", { class: "k" }, "🎁 " + T("app.f.bonus_short")),
+      h("span", { class: "v num" }, T("app.bonus_row", { days: l.bonus_days }))) : null,
     // No «Оплата» row: the installments are already in the price card, split into what goes where.
   );
 }
@@ -607,9 +620,10 @@ function listingView(view, rev) {
     h("div", { class: "stack" },
       priceHero(l), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
-      h("h2", null, T("app.seller.title")),
-      sellerCard(l.seller, l.id),
-      h("p", { class: "note" }, "🛡 " + T("app.seller.safety"))),
+      // sold: the listing stays a few days to show deals happen here, but nobody calls the seller any more
+      l.sold ? h("div", { class: "callout" }, T("app.sold_note")) : h("h2", null, T("app.seller.title")),
+      l.sold ? null : sellerCard(l.seller, l.id),
+      l.sold ? null : h("p", { class: "note" }, "🛡 " + T("app.seller.safety"))),
   ];
 }
 
@@ -638,12 +652,12 @@ function showFieldError(fields, err) {
 
 function newDraft(l) {
   return l
-    ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.end_date, start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
+    ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.card_end_date || l.end_date, bonus: l.bonus_days ? String(l.bonus_days) : "", start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
         kind: l.kind, code: l.promo_code || "", plan: B.limits.plans.includes(l.tariff_days) ? l.tariff_days : null,
         freeze: !!l.freeze_days, freezeDays: l.freeze_days ? String(l.freeze_days) : "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "", leftTyped: !!l.payments_left,
         name: l.seller_name, phone: l.seller_phone, shots: l.screenshot_count ? ["keep"] : [], keptShots: l.screenshot_count || 0,  // earlier screenshots stay attached
         fee: l.fee_due ? l.fee : 0 }  // paid once, edited for free
-    : { id: null, city: "", tariff: "", end_date: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shots: [], keptShots: 0, fee: B.vars.fee };
+    : { id: null, city: "", tariff: "", end_date: "", bonus: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shots: [], keptShots: 0, fee: B.vars.fee };
 }
 
 function sellForm(d, onDone, onKind) {
@@ -715,6 +729,10 @@ function sellForm(d, onDone, onKind) {
   const freezeRow = h("label", { class: "check" }, freeze, h("span", null, "❄️ " + T("app.f.freeze")));
   const freezeDays = digitsInput("freezeDays", 3, "20");
   freeze.addEventListener("change", () => { d.freeze = freeze.checked; drawFreeze(); });
+  // 1Fit bonus days start after the card's end date: the buyer gets them on top, the price counts them.
+  const bonus = digitsInput("bonus", 3, "60");
+  bonus.addEventListener("input", () => loadAdvice());
+  const realEnd = () => addDays(d.end_date, d.kind === "membership" ? d.bonus : 0);
   const monthly = digitsInput("monthly", 9, "500 000");
   const left = digitsInput("left", 2, "9");
   // Installments: no price to type — it is what is left to pay 1Fit, monthly × payments left.
@@ -777,9 +795,9 @@ function sellForm(d, onDone, onKind) {
     adviceCard.replaceChildren(...[
       h("div", { class: "label" }, "💰 " + T("app.sell.price_auto")),
       h("div", { class: "row" }, h("div", { class: "value num" }, money(advice.recommended) + " " + T("app.sum"))),
-      d.end_date ? h("p", { class: "giving num" }, "📦 " + T("app.sell.giving", { left: leftFor(d.end_date), date: dmy(d.end_date) })) : null,
+      d.end_date ? h("p", { class: "giving num" }, "📦 " + T("app.sell.giving", { left: leftFor(realEnd()), date: dmy(realEnd()) })) : null,
       h("p", null, T("app.sell.price_auto_hint")),
-      advice.max ? h("p", null, T("app.advice.text", { total: money(advice.total), fit_total: money(advice.fit_total), left: d.end_date ? leftFor(d.end_date) : "", saving: advice.saving }))
+      advice.max ? h("p", null, T("app.advice.text", { total: money(advice.total), fit_total: money(advice.fit_total), left: d.end_date ? leftFor(realEnd()) : "", saving: advice.saving }))
         : h("p", null, T("app.advice.heavy", { total: money(advice.installments) })),
       advice.max && advice.installments ? h("p", null, T("app.advice.installment", { total: money(advice.installments) })) : null,
     ].filter(Boolean));
@@ -790,7 +808,8 @@ function sellForm(d, onDone, onKind) {
       drawAuto();
       return;
     }
-    const show = false;  // no suggested price: the seller sets their own
+    // a suggestion from 1Fit's prices today: «Set» takes it, or the seller types their own
+    const show = d.kind === "membership" && !!advice && !isInst();
     adviceCard.hidden = !show;
     if (!show) { drawAdviceCheck(); return; }
     const use = h("button", { class: "btn small", type: "button", onclick: () => { setPrice(String(advice.recommended)); haptic("success"); } },
@@ -799,19 +818,19 @@ function sellForm(d, onDone, onKind) {
       h("div", { class: "label" }, "💡 " + T("app.advice.title")),
       h("div", { class: "row" }, h("div", { class: "value num" }, money(advice.recommended) + " " + T("app.sum")), use),
       advice.max
-        ? h("p", null, T("app.advice.text", { total: money(advice.total), fit_total: money(advice.fit_total), left: d.end_date ? leftFor(d.end_date) : "", saving: advice.saving }))
+        ? h("p", null, T("app.advice.text", { total: money(advice.total), fit_total: money(advice.fit_total), left: d.end_date ? leftFor(realEnd()) : "", saving: advice.saving }))
         : h("p", null, T("app.advice.heavy", { total: money(advice.installments) })),
       advice.max && advice.installments ? h("p", null, T("app.advice.installment", { total: money(advice.installments) })) : null,
-      advice.max ? h("p", null, T("app.advice.max", { max: money(advice.max) })) : null].filter(Boolean));
+      h("p", { class: "hint" }, T("app.advice.own"))].filter(Boolean));
     drawAdviceCheck();
   };
   const loadAdvice = () => {
     clearTimeout(adviceTimer);
     adviceTimer = setTimeout(async () => {
-      if (!autoPrice() || !d.end_date || !d.plan) { advice = null; drawAdvice(); return; }
+      if (d.kind !== "membership" || !d.end_date || !d.plan || isInst()) { advice = null; drawAdvice(); return; }
       const req = ++adviceReq;
       try {
-        const res = await api("POST", "advice", { end_date: d.end_date, paid_in_full: d.paid, tariff_days: d.plan,
+        const res = await api("POST", "advice", { end_date: d.end_date, bonus_days: d.bonus || 0, paid_in_full: d.paid, tariff_days: d.plan,
           monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null });
         if (req === adviceReq) { advice = res.advice; drawAdvice(); }
       } catch (e) { /* no advice is fine: the form still works */ }
@@ -857,6 +876,9 @@ function sellForm(d, onDone, onKind) {
       d.freeze = freeze.checked = true; d.freezeDays = freezeDays.value = String(read.freeze_days);
       drawFreeze(); filled.push(T("app.f.freeze_short"));
     }
+    if (read.bonus_days && !d.bonus && d.kind === "membership") {
+      d.bonus = bonus.value = String(read.bonus_days); filled.push(T("app.f.bonus_short"));
+    }
     if (filled.length) { guessLeft(); loadAdvice(); toast(T("app.sell.shot_filled", { fields: filled.join(", ") })); }
   };
   file.addEventListener("change", async () => {
@@ -895,6 +917,7 @@ function sellForm(d, onDone, onKind) {
     monthly_payment: field(T("app.f.monthly"), monthly),
     payments_left: field(T("app.f.left"), left, { hint: T("app.sell.left_hint") }),
     freeze_days: field(T("app.f.freeze_days"), freezeDays),
+    bonus_days: field("🎁 " + T("app.f.bonus"), bonus, { hint: T("app.f.bonus_hint") }),
     price: field(T("app.f.price"), price, { hint: T("app.sell.price_hint") }),
     description: field(T("app.f.desc"), desc, { extra: counter }),
     name: field(T("app.f.name"), name),
@@ -903,7 +926,7 @@ function sellForm(d, onDone, onKind) {
   const priceHint = fields.price.querySelector(".hint");
   const label = (wrap) => wrap.querySelector("span");
   const payCard = h("div", { class: "card" }, fields.payment, fields.monthly_payment, fields.payments_left);
-  const freezeCard = h("div", { class: "card" }, freezeRow, fields.freeze_days);
+  const freezeCard = h("div", { class: "card" }, freezeRow, fields.freeze_days, fields.bonus_days);
   const drawFreeze = () => { fields.freeze_days.hidden = !d.freeze; };
   const drawPriceMode = () => { fields.price.hidden = autoPrice() || isInst(); drawInst(); };
   const drawPay = () => {
@@ -936,8 +959,9 @@ function sellForm(d, onDone, onKind) {
     return [
       membership ? [T("app.f.plan"), T("app.plan.short." + d.plan)] : [T("app.f.what_promo"), d.tariff],
       d.end_date ? [membership ? "📦 " + T("app.confirm.giving") : T("app.f.date_promo"),
-        membership ? T("app.confirm.giving_v", { left: leftFor(d.end_date), date: dmy(d.end_date) }) : dmy(d.end_date), membership] : null,
+        membership ? T("app.confirm.giving_v", { left: leftFor(realEnd()), date: dmy(realEnd()) }) : dmy(d.end_date), membership] : null,
       membership ? ["❄️ " + T("app.f.freeze_short"), d.freeze ? T("app.freeze_row", { days: d.freezeDays }) : T("app.confirm.none")] : null,
+      membership && Number(d.bonus) ? ["🎁 " + T("app.f.bonus_short"), T("app.bonus_row", { days: d.bonus })] : null,
       membership ? [T("app.f.pay_short"), d.paid === false
         ? T("app.pay.installment_row", { monthly: money(d.monthly), left: d.left }) : T("app.pay.full_row")] : null,
       [T("app.f.price"), money(p) + " " + T("app.sum") + (d.negotiable ? " · " + T("app.negotiable") : ""), true],
@@ -960,7 +984,8 @@ function sellForm(d, onDone, onKind) {
       d.fee ? T("app.sell.submit_pay", { fee: money(d.fee) }) : T("app.confirm.ok"), T("app.confirm.back")))) return;
     submit.disabled = true;
     const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null,
-                   freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date, start_date: null, price: d.price, price_negotiable: d.negotiable,
+                   freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date,
+                   bonus_days: d.kind === "membership" ? d.bonus || 0 : 0, start_date: null, price: d.price, price_negotiable: d.negotiable,
                    kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
                    paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
                    description: d.description, name: d.name, phone: d.phone, screenshots: d.shots };

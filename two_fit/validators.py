@@ -122,6 +122,14 @@ def parse_freeze_days(text: str | None) -> int:
     return int(m.group(1))
 
 
+def parse_bonus_days(text: str | None) -> int:
+    """1Fit bonus days, turned on after the main membership: «60» or «60 дней»; 0 = none."""
+    m = re.fullmatch(r"\s*(\d{1,3})\s*[^\d]*", text or "")
+    if not m or not 0 <= int(m.group(1)) <= FREEZE_DAYS_MAX:
+        raise ValidationError("bad_bonus_days")
+    return int(m.group(1))
+
+
 def parse_monthly(text: str | None) -> int:
     """Installment: how much the seller pays 1Fit every month; the buyer takes these payments over."""
     try:

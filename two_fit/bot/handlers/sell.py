@@ -13,8 +13,9 @@ from ...i18n import CITIES
 from ... import ocr
 from ...money import fmt_money
 from ...ocr import MAX_SCREENSHOTS
+from ...price_watch import PriceWatcher
 from ...repo import LK, LS, Repo, RepoError, today_local
-from ...usage import payments_guess
+from ...usage import card_end, payments_guess, with_bonus
 from ...validators import (
     DESC_MAX,
     TARIFF_PLANS,
@@ -24,6 +25,7 @@ from ...validators import (
     normalize_phone,
     parse_description,
     parse_end_date,
+    parse_bonus_days,
     parse_freeze_days,
     parse_monthly,
     parse_name,
@@ -39,6 +41,7 @@ from ..middlewares import Btn
 from ..notify import Notifier
 from ..payments import send_fee_invoice
 from ..ui import (
+    advice_text,
     btn,
     contacts_block,
     esc,
@@ -66,6 +69,7 @@ class SellForm(StatesGroup):
     left = State()
     freeze = State()
     freeze_days = State()
+    bonus = State()
     code = State()
     price = State()
     desc = State()
@@ -76,10 +80,10 @@ class SellForm(StatesGroup):
     choose = State()
 
 
-STEPS = ["kind", "city", "plan", "tariff", "date", "start", "payment", "monthly", "left", "freeze", "freeze_days", "code", "price", "desc", "photo",
+STEPS = ["kind", "city", "plan", "tariff", "date", "start", "payment", "monthly", "left", "freeze", "freeze_days", "bonus", "code", "price", "desc", "photo",
          "name", "phone"]
 INSTALLMENT_STEPS = ("monthly", "left")  # asked only when the membership is paid in installments
-MEMBERSHIP_ONLY = ("plan", "start", "payment", "monthly", "left", "freeze", "freeze_days")
+MEMBERSHIP_ONLY = ("plan", "start", "payment", "monthly", "left", "freeze", "freeze_days", "bonus")
 PROMO_ONLY = ("tariff", "code")  # a membership has no tariff: «12 months» misled buyers
 STATE_OF = {s: getattr(SellForm, s) for s in STEPS}
 # Steps shown as «Step n/total»; the installment answers and the phone belong to the step before them.
@@ -88,7 +92,7 @@ NUMBERED = {
     LK.PROMO: ["city", "tariff", "date", "code", "price", "desc", "photo", "name"],
 }
 FIELDS = {  # field in «Change» menu -> first step to ask
-    "city": "city", "plan": "plan", "tariff": "tariff", "date": "date", "start": "start", "payment": "payment", "freeze": "freeze", "code": "code",
+    "city": "city", "plan": "plan", "tariff": "tariff", "date": "date", "start": "start", "payment": "payment", "freeze": "freeze", "bonus": "bonus", "code": "code",
     "price": "price", "desc": "desc", "photo": "photo", "contacts": "name",
 }
 # A promo code is described in its own words: what it gives, until when to activate it, what it costs.
@@ -192,6 +196,9 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, options))
     elif step == "freeze_days":
         await message.answer(ctx.t("sell.ask_freeze_days"), reply_markup=_nav(ctx, step))
+    elif step == "bonus":
+        none = [[btn(ctx.t("sell.bonus_no"), SellCb(action="bonus", value="0"))]]
+        await message.answer(ctx.t("sell.ask_bonus"), reply_markup=_nav(ctx, step, none))
     elif step == "price":
         d = data.get("draft") or {}
         if _installment(data):
@@ -199,7 +206,8 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
                 "sell.ask_price_installment", monthly=fmt_money(d["monthly_payment"]), left=d["payments_left"])
         else:
             text = prompt(ctx, data, step)
-        await message.answer(text, reply_markup=_nav(ctx, step))  # the seller's own price: no suggestion
+        # The price worked out from 1Fit's prices today, one tap to take it; or the seller types their own.
+        await message.answer(text + _advice_part(ctx, data), reply_markup=_nav(ctx, step, _advice_rows(ctx, data)))
     elif step == "desc":
         skip = [[btn(ctx.t("common.skip"), SellCb(action="skip"))]]
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, skip))
@@ -219,6 +227,25 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, extra))
     elif step == "phone":
         await message.answer(ctx.t("sell.ask_phone"), reply_markup=phone_kb(ctx))
+
+
+def _advice(ctx: Ctx, data: dict):
+    if _kind(data) != LK.MEMBERSHIP or _installment(data):
+        return None
+    return price_advice(ctx, data.get("draft") or {})
+
+
+def _advice_part(ctx: Ctx, data: dict) -> str:
+    a = _advice(ctx, data)
+    return "\n\n" + advice_text(ctx, a) if a else ""
+
+
+def _advice_rows(ctx: Ctx, data: dict) -> list:
+    """One tap to take the recommended price."""
+    a = _advice(ctx, data)
+    if not a:
+        return []
+    return [[btn(ctx.t("advice.use_btn", price=fmt_money(a.recommended)), SellCb(action="advice", value=str(a.recommended)))]]
 
 
 async def advance(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
@@ -272,12 +299,13 @@ async def fee_due(ctx: Ctx, data: dict) -> int:
 
 def preview_text(ctx: Ctx, data: dict, fee: int = 0) -> str:
     d = data["draft"]
+    shown = draft_shown(d)
     private = ctx.t("sell.photo_line", photo=ctx.t("sell.photo_yes" if d.get("screenshot_file_id") else "sell.photo_no"))
     if d.get("promo_code"):
         private += ctx.t("sell.private_code", code=esc(d["promo_code"]))
     parts = [
         ctx.t("sell.preview_title"),
-        listing_public(ctx, d, data.get("listing_id") or "—"),
+        listing_public(ctx, shown, data.get("listing_id") or "—"),
         contacts_block(ctx, d["seller_name"], d["seller_phone"], ctx.user.get("username"), ctx.user_id),
         ctx.t("sell.contacts_public"),
         "—",
@@ -289,8 +317,15 @@ def preview_text(ctx: Ctx, data: dict, fee: int = 0) -> str:
         parts.insert(3, ctx.t("sell.price_auto"))  # right under the card: where the price comes from
     if _kind(data) == LK.MEMBERSHIP and d.get("end_date"):
         # «You give the buyer 52 days — until 13 January 2027»: what the price is for, in plain words
-        parts.insert(2, ctx.t("sell.giving", left=left_text(ctx, d["end_date"]), date=fmt_day(ctx, d["end_date"])))
+        parts.insert(2, ctx.t("sell.giving", left=left_text(ctx, shown["end_date"]), date=fmt_day(ctx, shown["end_date"])))
     return "\n\n".join(parts)
+
+
+def draft_shown(d: dict) -> dict:
+    """A draft keeps the end date of the 1Fit card; buyers see the real one, the bonus days after it."""
+    if d.get("end_date") and d.get("kind", LK.MEMBERSHIP) == LK.MEMBERSHIP and d.get("bonus_days"):
+        return {**d, "end_date": with_bonus(d["end_date"], d["bonus_days"])}
+    return d
 
 
 def preview_kb(ctx: Ctx, data: dict, fee: int = 0) -> InlineKeyboardMarkup:
@@ -334,8 +369,9 @@ def _fee_intro(ctx: Ctx) -> str:
 
 
 @router.message(Btn("menu.sell"))
-async def menu_sell(message: Message, state: FSMContext, ctx: Ctx) -> None:
+async def menu_sell(message: Message, state: FSMContext, ctx: Ctx, price_watcher: PriceWatcher) -> None:
     await state.clear()
+    price_watcher.refresh_soon()  # today's 1Fit prices are ready by the time the price is worked out
     if not ctx.cfg.promo_enabled:  # promo codes are hidden: only a membership can be sold
         await state.set_data({"mode": "new", "draft": {"kind": LK.MEMBERSHIP}, "auto_price": ctx.cfg.auto_price})
         await message.answer(ctx.t("sell.intro_membership") + _fee_intro(ctx), reply_markup=main_menu(ctx))
@@ -356,6 +392,8 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
     if draft["tariff_days"] not in TARIFF_PLANS:  # a 6-month one listed before: the seller picks 12 or 24 months
         draft["tariff_days"] = None
     draft["has_freeze"] = bool(listing["freeze_days"])
+    draft["bonus_days"] = listing["bonus_days"] or 0
+    draft["end_date"] = card_end(listing)  # the form asks the date shown on the 1Fit card
     draft["screenshot_file_ids"] = Repo.screenshot_ids(listing)
     draft["ocr"] = Repo.ocr_of(listing)
     await state.clear()
@@ -587,6 +625,20 @@ async def on_freeze_days(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await _text_step(message, state, ctx, "freeze_days", parse_freeze_days, "freeze_days")
 
 
+@router.callback_query(SellForm.bonus, SellCb.filter(F.action == "bonus"))
+async def on_no_bonus(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> None:
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await draft_update(state, bonus_days=0)
+    await advance(call.message, state, ctx, "bonus")
+
+
+@router.message(SellForm.bonus)
+async def on_bonus(message: Message, state: FSMContext, ctx: Ctx) -> None:
+    """1Fit turns bonus days on after the main membership: they come on top of the end date."""
+    await _text_step(message, state, ctx, "bonus", parse_bonus_days, "bonus_days")
+
+
 @router.message(SellForm.price)
 async def on_price(message: Message, state: FSMContext, ctx: Ctx) -> None:
     if not message.text:
@@ -598,6 +650,18 @@ async def on_price(message: Message, state: FSMContext, ctx: Ctx) -> None:
         await message.answer(ctx.t(f"err.{e.code}"), reply_markup=_nav(ctx, "price"))
         return
     await _set_price(message, state, ctx, price)
+
+
+@router.callback_query(SellForm.price, SellCb.filter(F.action == "advice"))
+async def on_price_advice(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
+    """«✅ Set 4 030 000» under the price question: take the recommended price."""
+    a = _advice(ctx, await state.get_data())
+    if not a or callback_data.value != str(a.recommended):
+        await call.answer(ctx.t("common.stale"), show_alert=True)
+        return
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await _set_price(call.message, state, ctx, a.recommended)
 
 
 async def _set_price(message: Message, state: FSMContext, ctx: Ctx, price: int) -> None:
@@ -680,7 +744,7 @@ async def on_shots_done(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> Non
     await finish_screens(call.message, state, ctx)
 
 
-SCREEN_FIELDS = ("end_date", "tariff_days", "freeze_days")
+SCREEN_FIELDS = ("end_date", "tariff_days", "freeze_days", "bonus_days")
 
 
 async def finish_screens(message: Message, state: FSMContext, ctx: Ctx) -> None:
@@ -689,7 +753,7 @@ async def finish_screens(message: Message, state: FSMContext, ctx: Ctx) -> None:
     read = await read_screens(message.bot, draft.get("screenshot_file_ids") or [])
     await draft_update(state, ocr=read)
     if _kind(await state.get_data()) == LK.MEMBERSHIP:
-        current = {**draft, "freeze_days": draft.get("freeze_days") or 0}
+        current = {**draft, "freeze_days": draft.get("freeze_days") or 0, "bonus_days": draft.get("bonus_days") or 0}
         diff = [k for k in ocr.mismatches(read, current) if k in SCREEN_FIELDS]
         if diff:
             await state.update_data(screen_fix={k: read[k] for k in diff})
@@ -708,6 +772,8 @@ def screen_lines(ctx: Ctx, read: dict, draft: dict, keys: list[str]) -> str:
             return fmt_day(ctx, value)
         if key == "tariff_days":
             return ctx.t(f"app.plan.short.{value}") if value in TARIFF_PLANS else str(value)
+        if key == "bonus_days":
+            return ctx.t("app.bonus_row", days=value) if value else ctx.t("sell.freeze_no")
         return ctx.t("app.freeze_row", days=value) if value else ctx.t("sell.freeze_no")
     return "\n".join(ctx.t("sell.screen_line", field=ctx.t(f"sell.screen.{k}"), shot=show(k, read.get(k)),
                            yours=show(k, draft.get(k))) for k in keys)
@@ -739,6 +805,8 @@ async def on_screen_fix(call: CallbackQuery, callback_data: SellCb, state: FSMCo
             update = {}
         if "freeze_days" in fix:
             update.update(freeze_days=fix["freeze_days"], has_freeze=bool(fix["freeze_days"]))
+        if "bonus_days" in fix:
+            update["bonus_days"] = fix["bonus_days"]
         if update:
             await draft_update(state, **update)
             await call.message.answer(ctx.t("sell.screen_taken"))
@@ -846,7 +914,9 @@ async def on_to_preview(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> Non
 
 
 @router.callback_query(SellForm.preview, SellCb.filter(F.action == "send"))
-async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: Notifier) -> None:
+async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: Notifier,
+                  price_watcher: PriceWatcher) -> None:
+    await price_watcher.refresh()
     await apply_auto_price(state, ctx)  # 1Fit prices may have moved since the preview
     data = await state.get_data()
     draft = dict(data.get("draft") or {})
