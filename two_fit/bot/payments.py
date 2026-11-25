@@ -75,6 +75,12 @@ async def payme_url(bot: Bot, ctx: Ctx, listing: dict[str, Any]) -> str:
 
 
 async def send_fee_invoice(bot: Bot, ctx: Ctx, chat_id: int, listing: dict[str, Any]) -> None:
+    if ctx.cfg.fee_manual:  # by hand: the seller writes to the operator, an admin confirms the money
+        await bot.send_message(
+            chat_id, ctx.t("pay.manual_text", id=listing["id"], fee=fmt_money(listing["fee_amount"]),
+                           operator=ctx.cfg.operator),
+            reply_markup=kb([btn(ctx.t("pay.manual_btn"), url=ctx.cfg.support_url)]))
+        return
     if ctx.cfg.payme_enabled:
         await bot.send_message(
             chat_id, ctx.t("pay.payme_text", id=listing["id"], fee=fmt_money(listing["fee_amount"])),
@@ -104,6 +110,16 @@ async def announce_paid(notifier: Notifier, ctx: Ctx, listing: dict[str, Any], f
     await notifier.admins(ctx, lambda a: (
         a.t(key, id=lid) + "\n" + a.t("admin.n.fee_paid", fee=fmt_money(amount)),
         kb([btn(a.t("admin.open_btn", id=lid), AdmCb(action="open", id=lid))]),
+    ))
+
+
+async def announce_awaiting(notifier: Notifier, ctx: Ctx, listing: dict[str, Any]) -> None:
+    """Paid by hand: the admins hear a listing waits for its fee and confirm it once the money is in."""
+    lid, fee = listing["id"], fmt_money(listing["fee_amount"])
+    await notifier.admins(ctx, lambda a: (
+        a.t("admin.n.awaiting_fee", id=lid, fee=fee),
+        kb([btn(a.t("admin.fee_received", fee=fee), AdmCb(action="fee", id=lid))],
+           [btn(a.t("admin.open_btn", id=lid), AdmCb(action="open", id=lid))]),
     ))
 
 

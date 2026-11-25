@@ -59,7 +59,7 @@ async def on_pay_again(call: CallbackQuery, callback_data: MyCb, ctx: Ctx) -> No
     """«Pay» on an unpaid listing in «My listings»: a fresh invoice (the old one may be lost or expired)."""
     listing = await ctx.repo.get_listing(callback_data.id)
     problem = await ctx.repo.fee_problem(callback_data.id, ctx.user_id)
-    if problem or not ctx.cfg.payments_on:
+    if problem or not ctx.cfg.can_take_fee:
         await call.answer(ctx.t(f"pay.err.{problem or 'off'}"), show_alert=True)
         return
     await call.answer()

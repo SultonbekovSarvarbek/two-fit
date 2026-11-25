@@ -1034,7 +1034,9 @@ function afterSubmit(id, paid) {
 // it reaches the moderators once the fee is paid. «Later» leaves it in «My», where it can be paid any time.
 function payView(view) {
   const toMy = (text) => { S.my = null; S.stack = []; S.tab = "my"; render(); if (text) toast(text); };
-  const pay = h("button", { class: "btn", type: "button", onclick: (e) => busy(e.currentTarget, async () => {
+  const manual = B.vars.pay_manual;  // until Payme works: the seller pays the operator, an admin confirms
+  const pay = manual ? h("button", { class: "btn", type: "button", onclick: openOperator }, "✍️ " + T("app.payv.manual_btn"))
+    : h("button", { class: "btn", type: "button", onclick: (e) => busy(e.currentTarget, async () => {
     const url = view.url || (await api("POST", "listings/" + view.id + "/invoice")).invoice_url;
     view.url = null;  // a fresh link next time: an invoice link may be used once
     const status = await payInvoice(url);
@@ -1047,12 +1049,12 @@ function payView(view) {
     h("div", { class: "stack" },
       h("div", { class: "callout" },
         h("div", { style: "font-weight:600" }, T("app.payv.saved", { id: view.id })),
-        h("div", { style: "margin-top:4px" }, T("app.payv.text", { fee: money(view.fee) }))),
+        h("div", { style: "margin-top:4px" }, T(manual ? "app.payv.manual_text" : "app.payv.text", { fee: money(view.fee), id: view.id }))),
       h("div", { class: "card rows" },
         h("div", { class: "strong" }, h("span", { class: "k" }, T("app.sell.pay_label")),
           h("span", { class: "v num" }, money(view.fee) + " " + T("app.sum")))),
       pay,
-      h("p", { class: "note", style: "margin:0 4px" }, T("app.payv.note")),
+      h("p", { class: "note", style: "margin:0 4px" }, T(manual ? "app.payv.manual_note" : "app.payv.note")),
       h("button", { class: "btn ghost", type: "button", onclick: () => toMy(T("app.sell.unpaid_text")) }, T("app.payv.later"))),
   ];
 }
@@ -1067,7 +1069,7 @@ function sellView() {
   };
   // Placing a listing is paid: say how much before the seller fills anything in.
   const fee = B.vars.fee ? h("div", { class: "callout", style: "margin:0 0 14px" },
-    T("app.sell.fee", { fee: money(B.vars.fee) })) : null;
+    T(B.vars.pay_manual ? "app.sell.fee_manual" : "app.sell.fee", { fee: money(B.vars.fee) })) : null;
   return [title, fee, intro, sellForm(S.draft, afterSubmit, onKind)];
 }
 function editView(view) {
@@ -1106,7 +1108,8 @@ function mineView(view) {
       const data = await api("POST", "listings/" + l.id + "/" + path);
       haptic("success"); update(data); toast(T(doneKey));
     }); } }, T(key));
-  const pay = h("button", { class: "btn", type: "button", onclick: (e) => busy(e.currentTarget, async () => {
+  const pay = B.vars.pay_manual ? h("button", { class: "btn", type: "button", onclick: openOperator }, "✍️ " + T("app.payv.manual_btn"))
+    : h("button", { class: "btn", type: "button", onclick: (e) => busy(e.currentTarget, async () => {
     const res = await api("POST", "listings/" + l.id + "/invoice");
     const status = await payInvoice(res.invoice_url);
     if (status === "pending") { toast(T("app.pay.external")); return; }

@@ -39,7 +39,7 @@ from ..callbacks import AdmCb, SellCb
 from ..context import Ctx
 from ..middlewares import Btn
 from ..notify import Notifier
-from ..payments import send_fee_invoice
+from ..payments import announce_awaiting, send_fee_invoice
 from ..ui import (
     advice_text,
     btn,
@@ -309,7 +309,7 @@ def preview_text(ctx: Ctx, data: dict, fee: int = 0) -> str:
         contacts_block(ctx, d["seller_name"], d["seller_phone"], ctx.user.get("username"), ctx.user_id),
         ctx.t("sell.contacts_public"),
         "—",
-        ctx.t("sell.fee_note", fee=fmt_money(fee)) if fee else "",
+        ctx.t("sell.fee_note_manual" if ctx.cfg.fee_manual else "sell.fee_note", fee=fmt_money(fee)) if fee else "",
         private,
     ]
     parts = [p for p in parts if p]
@@ -365,7 +365,8 @@ async def show_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
 
 # ------------------------------------------------------------------ entry points
 def _fee_intro(ctx: Ctx) -> str:
-    return ctx.t("sell.intro_fee", fee=fmt_money(ctx.cfg.listing_fee)) if ctx.cfg.fee_enabled else ctx.t("sell.intro_free")
+    key = "sell.intro_fee_manual" if ctx.cfg.fee_manual else "sell.intro_fee"
+    return ctx.t(key, fee=fmt_money(ctx.cfg.listing_fee)) if ctx.cfg.fee_enabled else ctx.t("sell.intro_free")
 
 
 @router.message(Btn("menu.sell"))
@@ -981,6 +982,8 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
                                   reply_markup=main_menu(ctx))
         await ask_instagram(call.message, ctx, data)
         await send_fee_invoice(call.bot, ctx, ctx.user_id, listing)  # last, so the «Pay» button is at the bottom
+        if ctx.cfg.fee_manual and data.get("mode") != "edit":  # the admins confirm the money by hand
+            await announce_awaiting(notifier, ctx, listing)
         return
     await call.message.answer(ctx.t(done_key, id=listing_id), reply_markup=main_menu(ctx))
     await ask_instagram(call.message, ctx, data)

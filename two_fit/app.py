@@ -92,7 +92,7 @@ async def run() -> None:
         raise SystemExit("BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
     if not cfg.admin_ids:
         log.warning("ADMIN_IDS is empty: nobody can moderate listings. Send /id to the bot to learn your id.")
-    if cfg.listing_fee > 0 and not cfg.payments_on:
+    if cfg.listing_fee > 0 and not cfg.payments_on and not cfg.fee_manual:
         log.warning("neither PAYME_MERCHANT_ID/PAYME_KEY nor PAYMENT_PROVIDER_TOKEN is set: listings are placed for free")
     if cfg.payme_enabled and not cfg.payme_ikpu:
         log.warning("PAYME_IKPU is empty: Payme receipts go without the fiscal details")

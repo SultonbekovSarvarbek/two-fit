@@ -23,7 +23,7 @@ from aiohttp import web
 from ..bot.callbacks import AdmCb
 from ..bot.context import Ctx
 from ..bot.notify import Notifier
-from ..bot.payments import announce_paid, announce_refunded, fee_invoice_link
+from ..bot.payments import announce_awaiting, announce_paid, announce_refunded, fee_invoice_link
 from ..bot.ui import btn, kb, price_advice
 from ..config import Config
 from .. import ocr
@@ -149,7 +149,7 @@ def own_view(ctx: Ctx, listing: dict[str, Any]) -> dict[str, Any]:
         "reject_reason": listing["reject_reason"] if status == LS.REJECTED else None,
         "fee": listing["fee_amount"] or 0,
         "fee_due": Repo.fee_due(listing),  # an edit sends it back unpaid until it is paid
-        "can_pay": unpaid and ctx.cfg.payments_on,
+        "can_pay": unpaid and ctx.cfg.can_take_fee,
         "seller_name": listing["seller_name"],
         "seller_phone": listing["seller_phone"],
         "has_screenshot": bool(listing["screenshot_file_id"]),
@@ -287,7 +287,7 @@ class WebApp:
                      "fee_text": ctx.fee_text(), "instagram": self.cfg.instagram_url,
                      "promo_enabled": self.cfg.promo_enabled, "auto_price": self.cfg.auto_price,
                      "discount": DISCOUNT_PERCENT, "shot_required": self.cfg.screenshot_required,
-                     "ocr": self.ocr_on},
+                     "ocr": self.ocr_on, "pay_manual": self.cfg.fee_manual and self.cfg.fee_enabled},
             "support_url": self.cfg.support_url,
             "cities": list(CITIES),
             "user": {"name": ctx.user.get("contact_name") or ctx.user.get("tg_name") or "",
@@ -583,13 +583,18 @@ class WebApp:
         await self.repo.save_contact(ctx.user_id, draft["seller_name"], draft["seller_phone"])
         listing = await self.repo.get_listing(listing_id)
         if listing["status"] == LS.UNPAID:  # the admins hear about it once it is paid
+            if self.cfg.fee_manual:  # ... or now, to confirm the money when the seller pays the operator
+                await announce_awaiting(self.notifier, ctx, listing)
             return web.json_response({"id": listing_id, "invoice_url": await self._invoice_url(ctx, listing)},
                                      status=201)
         await self._notify_admins(ctx, "admin.n.new_listing", listing_id)
         return web.json_response({"id": listing_id}, status=201)
 
     async def _invoice_url(self, ctx: Ctx, listing: dict[str, Any]) -> str | None:
-        """None when Telegram does not answer: the listing is saved, the seller pays later from «My listings»."""
+        """None when Telegram does not answer: the listing is saved, the seller pays later from «My listings».
+        None too when the fee is paid by hand: the Mini App sends the seller to the operator."""
+        if self.cfg.fee_manual:
+            return None
         try:
             return await fee_invoice_link(self.bot, ctx, listing)
         except TelegramAPIError as e:
@@ -601,8 +606,10 @@ class WebApp:
         listing_id = int(request.match_info["id"])
         listing = await self._own(ctx, listing_id)
         problem = await self.repo.fee_problem(listing_id, ctx.user_id)
-        if problem or not self.cfg.payments_on:
+        if problem or not self.cfg.can_take_fee:
             raise ApiError(409, problem or "off", ctx.t(f"pay.err.{problem or 'off'}"))
+        if self.cfg.fee_manual:
+            return web.json_response({"invoice_url": None, "manual": True})
         url = await self._invoice_url(ctx, listing)
         if not url:
             raise ApiError(502, "invoice", ctx.t("common.error"))

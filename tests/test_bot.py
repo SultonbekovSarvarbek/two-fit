@@ -187,6 +187,34 @@ async def test_listing_fee_is_paid_before_moderation(tmp_path):
         await h.stop()
 
 
+async def test_fee_paid_by_hand_through_the_operator(tmp_path):
+    """Until Payme works: the seller writes to the operator, an admin presses «Payment received»."""
+    h = await Harness(tmp_path / "manual.db", fee=30_000, fee_manual=True).start()
+    try:
+        await choose_lang(h, SELLER, "uz")
+        await choose_lang(h, ADMIN, "ru")
+        assert "Тўлов — эълонни юборгандан кейин оператор орқали" in texts(await h.send(SELLER, "➕ Абонемент сотиш"))
+        await h.send(SELLER, "/start")
+        sent = await create_listing(h)
+        assert not [c for c in sent if type(c).__name__ == "SendInvoice"]
+        assert "Операторга (@s_sarvar) ёзинг" in texts(sent) and "№1" in texts(sent)
+        assert "t.me/s_sarvar" in str([getattr(c, "reply_markup", None) for c in sent])
+        assert (await h.repo.get_listing(1))["status"] == LS.UNPAID
+        assert "Объявление №1 ждёт оплаты 30\xa0000 сум" in h.texts_to(ADMIN)
+
+        assert "t.me/s_sarvar" in str([getattr(c, "reply_markup", None) for c in await h.click(SELLER, "my:pay:1:0")])
+        assert "Подтвердить, что за объявление №1 получено" in texts(await h.click(ADMIN, "ad:fee:1:0:"))
+        await h.click(ADMIN, "ad:fee!:1:0:")
+        listing = await h.repo.get_listing(1)
+        assert listing["status"] == LS.PENDING and listing["fee_paid_at"]
+        assert "30\xa0000 сўм тўлов қабул қилинди" in h.texts_to(SELLER)
+        assert "Новое объявление №1" in h.texts_to(ADMIN)
+        assert any("уже" in a.lower() or "оплач" in a.lower() for a in alerts(await h.click(ADMIN, "ad:fee!:1:0:")))
+        assert "Оплат размещения: 1" in texts(await h.click(ADMIN, "ad:stats:0:0:"))
+    finally:
+        await h.stop()
+
+
 async def test_unpaid_listing_can_be_paid_later(tmp_path):
     h = await Harness(tmp_path / "later.db", fee=30_000, payment_token="CLICK:TEST").start()
     try:

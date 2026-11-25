@@ -44,6 +44,9 @@ class Config:
     payme_ikpu: str = ""           # МХИК / ИКПУ code of the service, for the fiscal receipt
     payme_package_code: str = ""   # the package code tied to that IKPU (tasnif.soliq.uz)
     payme_vat_percent: int = 0     # НДС %, 0 when the merchant does not pay VAT
+    # Until Payme works: the seller pays the operator by hand, an admin presses «Payment received».
+    # Takes over from Payme and Telegram Payments while it is on.
+    fee_manual: bool = False
 
     @property
     def payme_enabled(self) -> bool:
@@ -56,7 +59,12 @@ class Config:
 
     @property
     def fee_enabled(self) -> bool:
-        return self.listing_fee > 0 and self.payments_on
+        return self.listing_fee > 0 and (self.payments_on or self.fee_manual)
+
+    @property
+    def can_take_fee(self) -> bool:
+        """A seller can pay an unpaid listing now: by hand through the operator, Payme or Telegram."""
+        return self.fee_manual or self.payments_on
 
     @property
     def webapp_enabled(self) -> bool:
@@ -114,4 +122,5 @@ def load_config() -> Config:
         payme_ikpu=os.getenv("PAYME_IKPU", "").strip(),
         payme_package_code=os.getenv("PAYME_PACKAGE_CODE", "").strip(),
         payme_vat_percent=int(os.getenv("PAYME_VAT_PERCENT", "0") or 0),
+        fee_manual=os.getenv("FEE_MANUAL", "").strip().lower() in ("1", "true", "yes", "on"),
     )

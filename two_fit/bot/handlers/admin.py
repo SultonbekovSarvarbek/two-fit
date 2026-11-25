@@ -18,6 +18,7 @@ from ..callbacks import AdmCb, FitPriceCb
 from ..context import Ctx
 from ..middlewares import IsAdmin
 from ..notify import Notifier
+from ..payments import announce_paid
 from ..ui import (
     btn, esc, fmt_date, fmt_dt, kb, listing_public, pager, pages_count, status_label, tg_ref,
 )
@@ -164,6 +165,8 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
 
     lid, st = listing["id"], listing["status"]
     rows = []
+    if st == LS.UNPAID and Repo.fee_due(listing):  # paid by hand through the operator
+        rows.append([btn(ctx.t("admin.fee_received", fee=fmt_money(listing["fee_amount"])), A("fee", id=lid))])
     if st == LS.PENDING:
         rows.append([btn(ctx.t("admin.approve"), A("appr", id=lid))])
         if listing["description"]:
@@ -283,6 +286,17 @@ async def _listing_action(call: CallbackQuery, ctx: Ctx, state: FSMContext, noti
         await state.update_data(listing_id=lid)
         await call.message.answer(ctx.t("admin.ask_reason", id=lid),
                                   reply_markup=kb([btn(ctx.t("admin.back"), A("open", id=lid))]))
+    elif a == "fee":
+        if listing["status"] != LS.UNPAID or not Repo.fee_due(listing):
+            raise RepoError("already")
+        await call.answer()
+        await _show(call, ctx.t("admin.confirm_fee", id=lid, fee=fmt_money(listing["fee_amount"])),
+                    confirm_kb(ctx, A("fee!", id=lid), A("open", id=lid)))
+    elif a == "fee!":
+        listing, amount = await repo.pay_fee_manually(lid, ctx.user_id)
+        await call.answer(ctx.t("admin.fee_ok", id=lid))
+        await _show(call, *await render_card(ctx, listing))
+        await announce_paid(notifier, ctx, listing, True, amount)  # the seller hears; admins get it to moderate
     elif a == "rm":
         if listing["status"] not in LS.ADMIN_REMOVABLE:
             raise RepoError("bad_status")

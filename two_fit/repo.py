@@ -623,6 +623,21 @@ class Repo:
                 return await self.get_listing(listing_id), False
             return await self._record_fee(listing_id, user_id, amount, currency, charge_id, provider_charge_id)
 
+    async def pay_fee_manually(self, listing_id: int, admin_id: int) -> tuple[dict[str, Any], int]:
+        """An admin confirms the seller paid the operator by hand: the listing goes to moderation.
+        Returns (listing, amount)."""
+        async with self.tx():
+            listing = await self.get_listing(listing_id)
+            if not listing:
+                raise RepoError("not_found")
+            if listing["status"] != LS.UNPAID or not self.fee_due(listing):
+                raise RepoError("already")
+            amount = listing["fee_amount"]
+            listing, _ = await self._record_fee(listing_id, listing["seller_id"], amount, "UZS",
+                                                f"manual:{listing_id}:{admin_id}:{now_iso()}", None)
+            await self._log(listing_id, admin_id, "fee_manual", amount=amount)
+        return listing, amount
+
     async def _record_fee(self, listing_id: int, user_id: int, amount: int, currency: str, charge_id: str,
                           provider_charge_id: str | None) -> tuple[dict[str, Any], bool]:
         """Inside a transaction: the payment row, and the listing moves from unpaid to moderation."""
