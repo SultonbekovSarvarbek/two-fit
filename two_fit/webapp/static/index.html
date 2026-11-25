@@ -596,10 +596,12 @@ function catalogView(view, rev) {
   const pick = (code) => { c.city = code; c.loaded = false; render(); };
   const pickClub = (code) => { c.club = code; c.loaded = false; render(); };
   // Clubs first: a buyer looks for their gym, then for the city.
-  const clubChips = c.clubs.length > 1 || c.club ? h("div", { class: "chips" },
+  // Every club is always there, even without listings yet: buyers see which clubs 2FIT covers.
+  const clubCount = (code) => (c.clubs.find((x) => x.code === code) || { count: 0 }).count;
+  const clubChips = h("div", { class: "chips" },
     h("button", { class: "chip", type: "button", "aria-pressed": String(!c.club), onclick: () => pickClub("") }, T("app.catalog.all_clubs")),
-    c.clubs.map((x) => h("button", { class: "chip", type: "button", "aria-pressed": String(c.club === x.code), onclick: () => pickClub(x.code) },
-      clubLogo(x.code), clubName(x.code), h("span", { class: "n num" }, x.count)))) : null;
+    (B.vars.clubs || []).map((x) => h("button", { class: "chip", type: "button", "aria-pressed": String(c.club === x.code), onclick: () => pickClub(x.code) },
+      clubLogo(x.code), x.name, clubCount(x.code) ? h("span", { class: "n num" }, clubCount(x.code)) : null)));
   const chips = c.cities.length > 1 || c.city ? h("div", { class: "chips" },
     h("button", { class: "chip", type: "button", "aria-pressed": String(!c.city), onclick: () => pick("") }, T("app.catalog.all")),
     c.cities.map((x) => h("button", { class: "chip", type: "button", "aria-pressed": String(c.city === x.code), onclick: () => pick(x.code) },
