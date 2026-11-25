@@ -47,6 +47,16 @@ class Config:
     # Until Payme works: the seller pays the operator by hand, an admin presses «Payment received».
     # Takes over from Payme and Telegram Payments while it is on.
     fee_manual: bool = False
+    # The public offer and the user agreement (two_fit/legal) name who provides the service: the requisites.
+    legal_name: str = ""
+    legal_inn: str = ""
+    legal_address: str = ""
+    legal_bank: str = ""
+    legal_account: str = ""
+    legal_mfo: str = ""
+    legal_phone: str = ""
+    legal_email: str = ""
+    legal_date: str = ""  # when the current version took effect, e.g. 01.12.2026
 
     @property
     def payme_enabled(self) -> bool:
@@ -123,4 +133,6 @@ def load_config() -> Config:
         payme_package_code=os.getenv("PAYME_PACKAGE_CODE", "").strip(),
         payme_vat_percent=int(os.getenv("PAYME_VAT_PERCENT", "0") or 0),
         fee_manual=os.getenv("FEE_MANUAL", "").strip().lower() in ("1", "true", "yes", "on"),
+        **{f"legal_{k}": os.getenv(f"LEGAL_{k.upper()}", "").strip()
+           for k in ("name", "inn", "address", "bank", "account", "mfo", "phone", "email", "date")},
     )

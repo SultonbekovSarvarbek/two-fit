@@ -1,4 +1,8 @@
-"""«All memberships»: list, city filter, pages and the listing card."""
+"""«All memberships»: list, club and city filters, pages and the listing card.
+
+The filter travels in the buttons' ``city`` field as «city.club» (both optional), so the buttons already
+sent in chats keep working.
+"""
 from __future__ import annotations
 
 from aiogram import Router
@@ -6,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
+from ...clubs import CLUBS, club_name
 from ...money import fmt_money
 from ..callbacks import CardCb, CatCb, CityMenuCb
 from ..context import Ctx
@@ -13,43 +18,56 @@ from ..middlewares import Btn
 from ..ui import btn, buyer_total, esc, kb, listing_public, pager, pages_count, seller_contacts
 
 router = Router(name="catalog")
+CLUB_MENU = "~club"  # CityMenuCb.city starting with it: the club menu instead of the city menu
 
 
-async def render_catalog(ctx: Ctx, page: int, city: str) -> tuple[str, InlineKeyboardMarkup]:
+def split_filter(value: str) -> tuple[str, str]:
+    city, _, club = (value or "").partition(".")
+    return city, club if club in CLUBS else ""
+
+
+def join_filter(city: str, club: str) -> str:
+    return f"{city}.{club}" if club else city
+
+
+async def render_catalog(ctx: Ctx, page: int, flt: str) -> tuple[str, InlineKeyboardMarkup]:
+    city, club = split_filter(flt)
+    flt = join_filter(city, club)
     size = ctx.cfg.page_size
-    rows, total = await ctx.repo.catalog(city or None, size, page * size)
+    rows, total = await ctx.repo.catalog(city or None, size, page * size, club=club or None)
     pages = pages_count(total, size)
     if total and page >= pages:  # list got shorter since the button was drawn
         page = pages - 1
-        rows, total = await ctx.repo.catalog(city or None, size, page * size)
+        rows, total = await ctx.repo.catalog(city or None, size, page * size, club=club or None)
 
     city_name = esc(ctx.i18n.city(ctx.lang, city)) if city else ""
+    filters = ([ctx.t("catalog.filter_club", club=esc(club_name(club)))] if club else []) + \
+              ([ctx.t("catalog.filter_on", city=city_name)] if city else [])
     if total == 0:
         text = ctx.t("catalog.title") + "\n\n"
+        text += "\n".join(filters) + "\n" if club else ""
         text += ctx.t("catalog.empty_city", city=city_name) if city else ctx.t("catalog.empty")
         markup = kb(
-            [btn(ctx.t("catalog.reset_btn"), CatCb(page=0, city=""))] if city else None,
+            [btn(ctx.t("catalog.reset_btn"), CatCb(page=0, city=""))] if flt else None,
             [btn(ctx.t("support.btn"), url=ctx.cfg.support_url)],
         )
         return text, markup
 
-    lines = [ctx.t("catalog.title"), ctx.t("catalog.count", count=total)]
-    if city:
-        lines.append(ctx.t("catalog.filter_on", city=city_name))
-    lines += ["", ctx.t("catalog.hint")]
+    lines = [ctx.t("catalog.title"), ctx.t("catalog.count", count=total), *filters, "", ctx.t("catalog.hint")]
     item_rows = [
         [btn(
-            ctx.t("catalog.item", id=r["id"], city=ctx.i18n.city(ctx.lang, r["city"]), price=fmt_money(buyer_total(r)))
+            ctx.t("catalog.item", id=r["id"], club=club_name(r["club"]), city=ctx.i18n.city(ctx.lang, r["city"]),
+                  price=fmt_money(buyer_total(r)))
             + (ctx.t("catalog.promo") if r["kind"] == "promo" else "")
             + (ctx.t("catalog.sold") if r["status"] == "sold" else ""),
-            CardCb(id=r["id"], page=page, city=city),
+            CardCb(id=r["id"], page=page, city=flt),
         )]
         for r in rows
     ]
-    filter_row = [btn(ctx.t("catalog.filter_btn"), CityMenuCb(city=city))]
-    if city:
-        filter_row.append(btn(ctx.t("catalog.reset_btn"), CatCb(page=0, city="")))
-    markup = kb(*item_rows, pager(ctx, page, pages, lambda p: CatCb(page=p, city=city)), filter_row)
+    filter_row = [btn(ctx.t("catalog.club_btn"), CityMenuCb(city=CLUB_MENU + flt)),
+                  btn(ctx.t("catalog.filter_btn"), CityMenuCb(city=flt))]
+    reset = [btn(ctx.t("catalog.reset_btn"), CatCb(page=0, city=""))] if flt else None
+    markup = kb(*item_rows, pager(ctx, page, pages, lambda p: CatCb(page=p, city=flt)), filter_row, reset)
     return "\n".join(lines), markup
 
 
@@ -78,19 +96,31 @@ async def on_page(call: CallbackQuery, callback_data: CatCb, ctx: Ctx) -> None:
 
 @router.callback_query(CityMenuCb.filter())
 async def on_city_menu(call: CallbackQuery, callback_data: CityMenuCb, ctx: Ctx) -> None:
+    value = callback_data.city
+    await call.answer()
+    if value.startswith(CLUB_MENU):  # which club: keeps the city chosen
+        city, club = split_filter(value[len(CLUB_MENU):])
+        clubs = await ctx.repo.catalog_clubs()
+        rows = [[btn(ctx.t("catalog.club_item", club=club_name(code), count=n), CatCb(page=0, city=join_filter(city, code)))]
+                for code, n in clubs]
+        if club:
+            rows.append([btn(ctx.t("app.catalog.all_clubs"), CatCb(page=0, city=city))])
+        rows.append([btn(ctx.t("catalog.to_list"), CatCb(page=0, city=join_filter(city, club)))])
+        await _edit(call, ctx.t("catalog.choose_club") if clubs else ctx.t("catalog.empty"), kb(*rows))
+        return
+    city, club = split_filter(value)
     cities = await ctx.repo.catalog_cities()
     rows = [
-        [btn(ctx.t("catalog.city_item", city=ctx.i18n.city(ctx.lang, code), count=n), CatCb(page=0, city=code))]
+        [btn(ctx.t("catalog.city_item", city=ctx.i18n.city(ctx.lang, code), count=n), CatCb(page=0, city=join_filter(code, club)))]
         for code, n in cities
     ]
-    rows.append([btn(ctx.t("catalog.to_list"), CatCb(page=0, city=callback_data.city))])
-    await call.answer()
+    rows.append([btn(ctx.t("catalog.to_list"), CatCb(page=0, city=value))])
     text = ctx.t("catalog.choose_city") if cities else ctx.t("catalog.empty")
     await _edit(call, text, kb(*rows))
 
 
-def card_markup(ctx: Ctx, tg_row: list | None, page: int, city: str) -> InlineKeyboardMarkup:
-    return kb(tg_row, [btn(ctx.t("catalog.to_list"), CatCb(page=page, city=city))])
+def card_markup(ctx: Ctx, tg_row: list | None, page: int, flt: str) -> InlineKeyboardMarkup:
+    return kb(tg_row, [btn(ctx.t("catalog.to_list"), CatCb(page=page, city=flt))])
 
 
 @router.callback_query(CardCb.filter())

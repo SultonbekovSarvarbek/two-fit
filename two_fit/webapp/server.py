@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import hmac
 import logging
 from datetime import date, datetime, timezone
@@ -20,6 +21,7 @@ from aiogram.types import BufferedInputFile
 from aiogram.utils.web_app import safe_parse_webapp_init_data
 from aiohttp import web
 
+from ..clubs import CLUBS, FIT, is_fit
 from ..bot.callbacks import AdmCb
 from ..bot.context import Ctx
 from ..bot.notify import Notifier
@@ -29,7 +31,7 @@ from ..config import Config
 from .. import ocr
 from ..payme import Payme
 from ..price_watch import PriceWatcher
-from ..money import round_k
+from ..money import fmt_money, round_k
 from ..ocr import MAX_SCREENSHOTS
 from ..i18n import CITIES, LANGS, LEGACY_CITIES, I18n
 from ..repo import LK, LS, Repo, RepoError, today_local
@@ -65,6 +67,18 @@ from ..validators import (
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+LEGAL_DIR = Path(__file__).resolve().parent.parent / "legal"
+LEGAL_PAGE = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>{title} — 2FIT</title>
+<style>
+:root {{ color-scheme: light dark; --fg: #1d1d1f; --bg: #fff; --muted: #6e6e73; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --fg: #f2f2f2; --bg: #111; --muted: #a1a1a6; }} }}
+body {{ margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }}
+main {{ max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; overflow-wrap: anywhere; }}
+h1 {{ font-size: 24px; line-height: 1.25; }} h2 {{ font-size: 18px; margin-top: 28px; }}
+a {{ color: inherit; }} .langs {{ color: var(--muted); font-size: 14px; }}
+</style></head><body><main><p class="langs"><a href="?lang=ru">Русский</a> · <a href="?lang=uz">Ўзбекча</a></p>
+{body}</main></body></html>"""
 INIT_DATA_MAX_AGE = 24 * 3600  # seconds; Telegram re-signs initData on every launch
 SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024
 MY_LIMIT = 100
@@ -86,7 +100,7 @@ class ApiError(Exception):
 def month_cost(listing: dict[str, Any], fit_prices: dict[int, int] | None) -> dict[str, Any] | None:
     """What the buyer pays per month of use next to what 1Fit charges; None when it is not cheaper.
     A price far too low to be the whole term is flagged ``suspicious`` instead of shown as a discount."""
-    if listing["kind"] == LK.PROMO:
+    if listing["kind"] == LK.PROMO or not is_fit(listing):  # compared with 1Fit's prices: 1Fit only
         return None
     installment = listing["paid_in_full"] == 0
     a = advise(listing["end_date"], today_local(), fit_prices,
@@ -120,6 +134,7 @@ def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = Non
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["kind"] = listing["kind"]  # the promo code itself is never public
+    view["club"] = listing["club"] or FIT  # whose membership: 1fit, ozone, embassy, ufc
     view["sold"] = listing["status"] == LS.SOLD  # shown a month with the «Sold» badge, never with contacts
     view["tariff_days"] = listing["tariff_days"]  # 180 / 365 / 730, None on old listings
     view["freeze_days"] = listing["freeze_days"]  # unused freeze days the buyer gets; 0 none, None not asked
@@ -181,6 +196,9 @@ class WebApp:
         app = web.Application(middlewares=[self.errors_mw, self.auth_mw], client_max_size=64 * 1024)
         r = app.router
         r.add_get("/", self.index)
+        r.add_static("/clubs", STATIC_DIR / "clubs")  # the clubs' logos
+        r.add_get("/offer", self.legal)  # opened in the browser: no Telegram login needed
+        r.add_get("/terms", self.legal)
         r.add_get("/api/bootstrap", self.bootstrap)
         r.add_post("/api/lang", self.set_lang)
         r.add_get("/api/catalog", self.catalog)
@@ -263,6 +281,26 @@ class WebApp:
         ))
 
     # ------------------------------------------------------------------ pages
+    async def legal(self, request: web.Request) -> web.Response:
+        """The public offer or the user agreement, with the requisites from the settings."""
+        doc = request.path.strip("/")
+        lang = request.query.get("lang", "ru")
+        lang = lang if lang in LANGS else "ru"
+        body = (LEGAL_DIR / f"{doc}.{lang}.html").read_text(encoding="utf-8")
+        missing = "[не указано]" if lang == "ru" else "[кўрсатилмаган]"
+        c = self.cfg
+        values = {"LEGAL_NAME": c.legal_name, "LEGAL_INN": c.legal_inn, "LEGAL_ADDRESS": c.legal_address,
+                  "LEGAL_BANK": c.legal_bank, "LEGAL_ACCOUNT": c.legal_account, "LEGAL_MFO": c.legal_mfo,
+                  "LEGAL_PHONE": c.legal_phone, "LEGAL_EMAIL": c.legal_email, "EFFECTIVE_DATE": c.legal_date,
+                  "FEE": fmt_money(c.listing_fee), "OPERATOR": c.operator}
+        for key, value in values.items():
+            body = body.replace("{{" + key + "}}", html.escape(value) if value else missing)
+        # the documents link to each other as «offer» / «terms»: keep the language
+        body = body.replace('href="offer"', f'href="offer?lang={lang}"').replace('href="terms"', f'href="terms?lang={lang}"')
+        title = self.i18n.t(lang, "legal.offer" if doc == "offer" else "legal.terms")
+        return web.Response(text=LEGAL_PAGE.format(lang=lang, title=html.escape(title), body=body),
+                            content_type="text/html", headers={"Cache-Control": "no-cache"})
+
     async def index(self, request: web.Request) -> web.StreamResponse:
         return web.FileResponse(STATIC_DIR / "index.html", headers={
             "Cache-Control": "no-cache",
@@ -287,7 +325,8 @@ class WebApp:
                      "fee_text": ctx.fee_text(), "instagram": self.cfg.instagram_url,
                      "promo_enabled": self.cfg.promo_enabled, "auto_price": self.cfg.auto_price,
                      "discount": DISCOUNT_PERCENT, "shot_required": self.cfg.screenshot_required,
-                     "ocr": self.ocr_on, "pay_manual": self.cfg.fee_manual and self.cfg.fee_enabled},
+                     "ocr": self.ocr_on, "clubs": [{"code": k, "name": v} for k, v in CLUBS.items()],
+                     "pay_manual": self.cfg.fee_manual and self.cfg.fee_enabled},
             "support_url": self.cfg.support_url,
             "cities": list(CITIES),
             "user": {"name": ctx.user.get("contact_name") or ctx.user.get("tg_name") or "",
@@ -325,13 +364,19 @@ class WebApp:
             limit = min(CATALOG_PAGE_MAX, max(1, int(q.get("limit", "20"))))
         except ValueError:
             raise ApiError(400, "bad_request", "Bad request") from None
-        rows, total = await self.repo.catalog(city or None, limit, offset)
+        club = q.get("club", "")
+        if club not in CLUBS:
+            club = ""
+        rows, total = await self.repo.catalog(city or None, limit, offset, club=club or None)
         cities = await self.repo.catalog_cities()
+        clubs = await self.repo.catalog_clubs()
         return web.json_response({
             "items": [public_view(r, self.repo.fit_prices) for r in rows],
             "total": total,
             "city": city,
+            "club": club,
             "cities": [{"code": code, "count": n} for code, n in cities],
+            "clubs": [{"code": code, "count": n} for code, n in clubs],
         })
 
     async def listing(self, request: web.Request) -> web.Response:
@@ -413,8 +458,16 @@ class WebApp:
             draft["tariff"] = self._field(ctx, "tariff", parse_tariff, body.get("tariff"))  # what it gives
             draft["promo_code"] = self._field(ctx, "promo_code", parse_promo_code, body.get("promo_code"))
         else:
-            self._membership_fields(ctx, body, draft, number)
-        a = price_advice(ctx, draft)
+            # Older app versions do not ask: everything was 1Fit then. The new form makes the seller pick.
+            club = body.get("club") or (existing["club"] if existing else FIT)
+            if club not in CLUBS:
+                raise ApiError(400, "bad_club", ctx.t("app.err.club"), "club")
+            draft["club"] = club
+            if club == FIT:
+                self._membership_fields(ctx, body, draft, number)
+            else:
+                self._club_fields(ctx, body, draft)
+        a = price_advice(ctx, draft)  # 1Fit only: other clubs name their own price
         if kind != LK.PROMO and draft.get("paid_in_full") is False:
             # Installments: the price is what is left to pay 1Fit, worked out here — the app sends no price.
             total = draft["monthly_payment"] * draft["payments_left"]
@@ -470,19 +523,27 @@ class WebApp:
             return 0
         return self._field(ctx, "bonus_days", parse_bonus_days, str(bonus) if isinstance(bonus, int) else bonus)
 
+    def _freeze(self, ctx: Ctx, body: dict[str, Any]) -> int:
+        """Freeze days: 0 = none; a number = that many unused days go to the buyer."""
+        freeze = body.get("freeze_days")
+        if freeze in (None, 0, "", "0"):
+            return 0
+        return self._field(ctx, "freeze_days", parse_freeze_days, str(freeze) if isinstance(freeze, int) else freeze)
+
+    def _club_fields(self, ctx: Ctx, body: dict[str, Any], draft: dict[str, Any]) -> None:
+        """Another club than 1Fit: the end date and the freeze days; no 1Fit tariff, bonus days or installments."""
+        draft["freeze_days"] = self._freeze(ctx, body)
+        draft["start_date"] = None
+        draft["paid_in_full"] = True
+        draft["bonus_days"] = 0
+
     def _membership_fields(self, ctx: Ctx, body: dict[str, Any], draft: dict[str, Any], number) -> None:
         """The 1Fit tariff, the start date and how the membership is paid: fully or in installments."""
         plan = body.get("tariff_days")
         if plan not in TARIFF_PLANS or isinstance(plan, bool):
             raise ApiError(400, "bad_plan", ctx.t("app.err.plan"), "tariff_days")
         draft["tariff_days"] = plan
-        # Freeze days: 0 = none; a number = that many unused days go to the buyer.
-        freeze = body.get("freeze_days")
-        if freeze in (None, 0, "", "0"):
-            draft["freeze_days"] = 0
-        else:
-            draft["freeze_days"] = self._field(ctx, "freeze_days", parse_freeze_days,
-                                               str(freeze) if isinstance(freeze, int) else freeze)
+        draft["freeze_days"] = self._freeze(ctx, body)
         draft["bonus_days"] = self._bonus(ctx, body)
         try:
             check_plan_end(date.fromisoformat(draft["end_date"]), today_local(), plan)
@@ -509,6 +570,8 @@ class WebApp:
         ctx = request[CTX]
         await self.prices.refresh()
         body = await self._json(request)
+        if (body.get("club") or FIT) != FIT:  # the advice comes from 1Fit's prices
+            return web.json_response({"advice": None})
         try:
             end = self._iso_date(body.get("end_date"), today_local())
         except ValidationError:

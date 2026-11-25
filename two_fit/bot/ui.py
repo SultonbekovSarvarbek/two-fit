@@ -14,6 +14,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from ..clubs import club_name, is_fit
 from ..i18n import LANGS
 from ..money import fmt_money, round_k
 from ..pricing import Advice, advise
@@ -138,6 +139,7 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
     text = ctx.t(
         "card.body_promo" if promo else "card.body",
         id=listing_id,
+        club=esc(club_name(data.get("club"))),
         city=esc(ctx.i18n.city(ctx.lang, data["city"])),
         tariff=esc(data.get("tariff") or ""),
         left=left_text(ctx, data["end_date"]),
@@ -155,9 +157,17 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
     return text
 
 
+def legal_links(ctx: Ctx) -> str:
+    """«📄 Offer · User agreement»: the pages the Mini App's server shows; empty without the Mini App."""
+    if not ctx.cfg.webapp_enabled:
+        return ""
+    base = ctx.cfg.webapp_url if ctx.cfg.webapp_url.endswith("/") else ctx.cfg.webapp_url.rsplit("/", 1)[0] + "/"
+    return "\n\n" + ctx.t("legal.links", offer=f"{base}offer?lang={ctx.lang}", terms=f"{base}terms?lang={ctx.lang}")
+
+
 def price_advice(ctx: Ctx, data: dict[str, Any]) -> Advice | None:
     """Price advice for a membership draft (end date from the 1Fit card); None for a promo code or without an end date."""
-    if data.get("kind") == "promo" or not data.get("end_date"):
+    if data.get("kind") == "promo" or not data.get("end_date") or not is_fit(data):  # 1Fit's prices: 1Fit only
         return None
     # a stored listing has 0, a draft has False: both mean the buyer takes the installments over
     installment = data.get("paid_in_full") is not None and not data["paid_in_full"]

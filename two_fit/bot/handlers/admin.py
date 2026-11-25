@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InputMediaPhoto, 
 
 from ...money import fmt_money
 from ... import ocr
+from ...clubs import is_fit
 from ...repo import LS, Repo, RepoError
 from ...usage import card_end
 from ...validators import clean_text
@@ -101,8 +102,8 @@ async def render_list(ctx: Ctx, status: str, page: int) -> tuple[str, InlineKeyb
 
 def screen_check(ctx: Ctx, listing: dict) -> list[str]:
     """For moderation: what the screenshots say and where it differs from the listing."""
-    if not Repo.screenshot_ids(listing) or listing["kind"] == "promo":
-        return []
+    if not Repo.screenshot_ids(listing) or listing["kind"] == "promo" or not is_fit(listing):
+        return []  # the reader knows only 1Fit's card: other clubs are checked by eye
     read = Repo.ocr_of(listing)
     if not read:
         return [ctx.t("admin.card.ocr_none")] if ocr.available() else []

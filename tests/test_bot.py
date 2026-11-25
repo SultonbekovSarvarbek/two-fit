@@ -29,6 +29,7 @@ async def create_listing(h, uid=SELLER, price="2 000 000"):
     """Seller (in Uzbek) walks the whole wizard. Returns the calls of the final «send»."""
     await h.send(uid, "➕ Абонемент сотиш")
     await h.click(uid, "sl:kind:membership")
+    await h.click(uid, "sl:club:1fit")
     await h.click(uid, "sl:city:tashkent")
     await h.click(uid, "sl:plan:365")
     await h.send(uid, END)
@@ -239,8 +240,9 @@ async def test_wizard_navigation_and_validation(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:samarkand")
-    assert "Шаг 1/9" in texts(await h.click(SELLER, "sl:back:"))  # back to city
+    assert "Шаг 2/10" in texts(await h.click(SELLER, "sl:back:"))  # back to city
     await h.click(SELLER, "sl:city:samarkand")
     await h.click(SELLER, "sl:plan:365")
     assert "прошла" in texts(await h.send(SELLER, "01.01.2020"))
@@ -321,13 +323,14 @@ async def test_restart_keeps_language_data_and_wizard(tmp_path):
     await choose_lang(h1, SELLER, "uz")
     await h1.send(SELLER, "➕ Абонемент сотиш")
     await h1.click(SELLER, "sl:kind:membership")
+    await h1.click(SELLER, "sl:club:1fit")
     await h1.click(SELLER, "sl:city:tashkent")
     await h1.click(SELLER, "sl:plan:365")
     await h1.stop()
 
     h2 = await Harness(db).start()  # "restart"
     nxt = await h2.send(SELLER, END)  # wizard continues at the payment step, in Uzbek
-    assert "4/9-қадам" in texts(nxt)
+    assert "5/10-қадам" in texts(nxt)
     welcome = await h2.send(SELLER, "/start")
     assert "Тилни танланг" not in texts(welcome) and "Эълон жойлаш — бепул" in texts(welcome)
     await h2.stop()
@@ -343,9 +346,10 @@ async def test_installment_wizard_and_card(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
     await h.click(SELLER, "sl:plan:365")
-    assert "Шаг 4/9" in texts(await h.send(SELLER, END))
+    assert "Шаг 5/10" in texts(await h.send(SELLER, END))
     assert "Выберите действие" in texts(await h.send(SELLER, "500000"))  # a button is expected here
     assert "в месяц" in texts(await h.click(SELLER, "sl:pay:installment"))
     assert "цифрами" in texts(await h.send(SELLER, "много"))
@@ -354,7 +358,7 @@ async def test_installment_wizard_and_card(h):
     # no price question with installments: the price is monthly × payments left, said right away
     after_left = texts(await h.send(SELLER, "9"))
     assert "Цена: <b>4\xa0500\xa0000 сум</b> — 500\xa0000 сум × 9" in after_left
-    assert "Шаг 5/8" in after_left  # then the freeze question; one step fewer
+    assert "Шаг 6/9" in after_left  # then the freeze question; one step fewer
     assert "Сколько дней" in texts(await h.click(SELLER, "sl:freeze:yes"))
     assert "от 1 до 365" in texts(await h.send(SELLER, "0"))
     assert "бонусные дни" in texts(await h.send(SELLER, "20"))
@@ -381,6 +385,7 @@ async def test_only_12_and_24_month_tariffs_can_be_sold(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:club:1fit")
     ask = await h.click(SELLER, "sl:city:tashkent")
     plans = [b.callback_data for c in ask for b in buttons_of(c) if (b.callback_data or "").startswith("sl:plan:")]
     assert plans == ["sl:plan:365", "sl:plan:730"]
@@ -393,22 +398,24 @@ async def test_fully_paid_skips_installment_questions(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, END)
-    assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:pay:full"))
+    assert "Шаг 6/10" in texts(await h.click(SELLER, "sl:pay:full"))
     assert "бонусные дни" in texts(await h.click(SELLER, "sl:freeze:no"))
     ask_price = texts(await h.click(SELLER, "sl:bonus:0"))
-    assert "Шаг 6/9" in ask_price and "больше он ничего не доплачивает" in ask_price
+    assert "Шаг 7/10" in ask_price and "больше он ничего не доплачивает" in ask_price
     assert "бонусные дни" in texts(await h.click(SELLER, "sl:back:"))  # back to the bonus days
-    assert "Шаг 5/9" in texts(await h.click(SELLER, "sl:back:"))  # back to the freeze question
-    assert "Шаг 4/9" in texts(await h.click(SELLER, "sl:back:"))  # then the payment, skipping installments
+    assert "Шаг 6/10" in texts(await h.click(SELLER, "sl:back:"))  # back to the freeze question
+    assert "Шаг 5/10" in texts(await h.click(SELLER, "sl:back:"))  # then the payment, skipping installments
 
 
 async def test_promo_code_wizard(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:promo")
+    await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
     await h.send(SELLER, "Безлимит на 1 месяц")
     ask_code = texts(await h.send(SELLER, END))
@@ -435,6 +442,7 @@ async def test_preview_says_what_the_seller_gives(h):
     await choose_lang(h, SELLER, "ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, END)
@@ -490,3 +498,39 @@ async def test_admin_asks_every_seller_to_update_the_price(h):
     assert len(got) == 1 and "Бу 2FIT оператори" in texts(got) and "2FIT жамоаси" in texts(got)
     assert [b.callback_data for c in got for b in buttons_of(c)] == ["my:open:1:0", "my:open:2:0"]
     assert not h.to(STRANGER)[-1:] or "нархини" not in texts(h.to(STRANGER)[-1:])
+
+
+async def test_other_club_membership_has_no_1fit_questions(h):
+    """UFC Gym, Ozone, Fitness Embassy: no 1Fit tariff, installments, bonus days or suggested price."""
+    await choose_lang(h, SELLER, "ru")
+    await choose_lang(h, ADMIN, "ru")
+    await h.send(SELLER, "➕ Продать абонемент")
+    await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:club:ufc")
+    await h.click(SELLER, "sl:city:tashkent")
+    freeze = texts(await h.send(SELLER, END))  # straight from the date to the freeze days
+    assert "заморозки" in freeze and "Шаг 4/8" in freeze
+    price = texts(await h.click(SELLER, "sl:freeze:no"))
+    assert "за весь оставшийся срок" in price and "Рекомендуемая" not in price and "1Fit" not in price
+    await h.send(SELLER, "3 000 000")
+    await h.click(SELLER, "sl:skip:")  # no description
+    await h.send(SELLER, photo=True)
+    await h.click(SELLER, "sl:shotsdone:")
+    await h.send(SELLER, "Алишер")
+    preview = texts(await h.send(SELLER, contact="+998901112233"))
+    assert "UFC Gym" in preview and "3\xa0000\xa0000 сум" in preview
+    await h.click(SELLER, "sl:send:")
+    listing = await h.repo.get_listing(1)
+    assert (listing["club"], listing["tariff_days"], listing["paid_in_full"], listing["price"]) == ("ufc", None, 1, 3_000_000)
+    await h.click(ADMIN, "ad:appr:1:0:")
+
+    # buyers: the club on the list, a club filter that keeps the city
+    await choose_lang(h, BUYER, "ru")
+    lst = await h.send(BUYER, "🏋️ Все абонементы")
+    assert "UFC Gym" in str([getattr(c, "reply_markup", None) for c in lst])
+    menu = await h.click(BUYER, "cty:~club")
+    assert "UFC Gym (1)" in str([getattr(c, "reply_markup", None) for c in menu])
+    assert "Найдено: 1" in texts(await h.click(BUYER, "cat:0:.ufc"))
+    assert "Пока нет" in texts(await h.click(BUYER, "cat:0:.ozone"))
+    card = texts(await h.click(BUYER, "card:1:0:.ufc"))
+    assert "UFC Gym" in card and "1Fit" in card  # the safety note: «in the club or in the 1Fit app»

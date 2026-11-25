@@ -200,7 +200,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
                              "description", "price_total", "kind", "left",
-                             "month_cost", "tariff_days", "freeze_days", "bonus_days", "card_end_date", "sold"}
+                             "month_cost", "tariff_days", "freeze_days", "bonus_days", "card_end_date", "sold", "club"}
         # No start date, but the 12-month tariff gives it: «used 5 of 12 months» still shows.
         assert item["start_date"] is None and item["tariff_days"] == 365 and item["usage"]["total"] == 12
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
@@ -486,7 +486,7 @@ async def test_promo_codes_hidden_by_default(tmp_path):
         await h.send(SELLER, "/start")
         await h.click(SELLER, "lang:ru")
         first = texts(await h.send(SELLER, "➕ Продать абонемент"))
-        assert "Шаг 1/9" in first and "Что вы продаёте" not in first and "промокод" not in first
+        assert "Шаг 1/10" in first and "Абонемент какого клуба" in first and "Что вы продаёте" not in first and "промокод" not in first
         assert "промокод" not in texts(await h.send(SELLER, "ℹ️ Как это работает"))
     finally:
         await h.stop()
@@ -544,6 +544,7 @@ async def test_bot_requires_the_screenshot(tmp_path):
         await h.click(SELLER, "lang:ru")
         await h.send(SELLER, "➕ Продать абонемент")
         await h.click(SELLER, "sl:kind:membership")
+        await h.click(SELLER, "sl:club:1fit")
         await h.click(SELLER, "sl:city:tashkent")
         await h.click(SELLER, "sl:plan:365")
         await h.send(SELLER, (tl() + td(days=200)).strftime("%d.%m.%Y"))
@@ -602,3 +603,39 @@ async def test_bot_card_view_is_recorded(h):
     from two_fit.bot.callbacks import CardCb
     await h.click(BUYER, CardCb(id=lid).pack())
     assert await h.repo.contact_counts(lid) == {"buyers": 1, "reached": 0}
+
+
+# ------------------------------------------------------------------ clubs and documents
+async def test_other_club_listing_and_club_filter(h, api):
+    """A UFC Gym membership: no 1Fit tariff or installments, no suggested price; buyers filter by club."""
+    status, data = await api.call("POST", "/api/listings", SELLER, draft(
+        club="ufc", tariff_days=None, paid_in_full=None, bonus_days=30, price="3 000 000"))
+    assert status == 201, data
+    listing = await h.repo.get_listing(data["id"])
+    assert (listing["club"], listing["tariff_days"], listing["paid_in_full"], listing["bonus_days"]) == ("ufc", None, 1, 0)
+    await h.repo.approve(data["id"], ADMIN)
+    await publish(h, api)  # a 1Fit one
+    status, err = await api.call("POST", "/api/listings", SELLER, draft(club="gold"))
+    assert (status, err["error"]) == (400, "bad_club")
+    status, res = await api.call("POST", "/api/advice", SELLER, {"end_date": END, "club": "ufc", "tariff_days": 365})
+    assert res["advice"] is None  # 1Fit's prices say nothing about UFC Gym
+
+    status, cat = await api.call("GET", "/api/catalog", BUYER)
+    assert cat["total"] == 2 and {c["code"]: c["count"] for c in cat["clubs"]} == {"1fit": 1, "ufc": 1}
+    status, cat = await api.call("GET", "/api/catalog?club=ufc", BUYER)
+    assert cat["total"] == 1 and cat["club"] == "ufc" and cat["items"][0]["club"] == "ufc"
+    assert cat["items"][0]["month_cost"] is None  # no «cheaper than 1Fit» for another club
+    status, boot = await api.call("GET", "/api/bootstrap", BUYER)
+    assert [c["code"] for c in boot["vars"]["clubs"]] == ["1fit", "ozone", "embassy", "ufc"]
+
+
+async def test_documents_and_logos_are_public(h, api):
+    res = await api.client.get("/offer?lang=ru")
+    text = await res.text()
+    assert res.status == 200 and "Публичная оферта" in text and "@s_sarvar" in text and "{{" not in text
+    assert "[не указано]" in text  # requisites not set yet are marked, not left as placeholders
+    assert 'href="terms?lang=ru"' in text
+    res = await api.client.get("/terms?lang=uz")
+    assert res.status == 200 and "{{" not in await res.text()
+    res = await api.client.get("/clubs/ufc.png")
+    assert res.status == 200 and res.content_type == "image/png"

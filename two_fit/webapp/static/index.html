@@ -99,6 +99,21 @@ p { margin: 0; }
 }
 .chip[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 .chip .n { opacity: 0.6; margin-left: 5px; }
+.chip .clogo { width: 18px; height: 18px; margin: -3px 6px -3px -6px; vertical-align: middle; }
+/* club logos: the clubs' own pictures, 1Fit as a word mark */
+.clogo { display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%; overflow: hidden;
+  width: 22px; height: 22px; background: #111; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: -0.02em; }
+.clogo img { width: 100%; height: 100%; object-fit: cover; }
+.clogo.fit { background: #ff4d2e; }
+.club-tag { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.club-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.club-grid button { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; text-align: left;
+  background: var(--bg); border: 1.5px solid transparent; font-weight: 600; font-size: 14px; min-width: 0; }
+.club-grid button .clogo { width: 36px; height: 36px; font-size: 12px; }
+.club-grid button span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.club-grid button[aria-pressed="true"] { border-color: var(--accent); }
+.legal { font-size: 13px; text-align: center; margin: 0 8px; }
+.legal a { color: inherit; text-decoration: underline; }
 
 /* listing rows — a ticket: details on the left, price on the tear-off stub */
 .item { position: relative; overflow: hidden; display: flex; align-items: stretch; gap: 14px; width: 100%; padding: 15px 16px; }
@@ -301,7 +316,7 @@ const S = {
   tab: "catalog",
   stack: [],        // views opened on top of a tab
   rev: 0,           // bumps on every render; stale async results are dropped
-  cat: { city: "", items: [], total: 0, cities: [], loaded: false },
+  cat: { city: "", club: "", items: [], total: 0, cities: [], clubs: [], loaded: false },
   my: null,         // own listings, loaded lazily
   draft: null,      // unfinished «sell» form survives tab switches
 };
@@ -502,6 +517,7 @@ const splash = () => h("div", { class: "splash" }, logo(true), spinner());
 function listingRow(l, onclick, extra) {
   return h("button", { class: "card item" + (l.sold && !extra ? " sold" : ""), type: "button", onclick },
     h("div", { class: "main" },
+      clubTag(l),
       h("div", { class: "title" }, isPromo(l) ? l.tariff : leftText(l, "app.left_title")),
       h("div", { class: "sub" }, city(l.city) + " · " + T("app.until", { date: dmy(l.end_date) })),
       extra || (l.sold ? soldBadge() : promoBadge(l))),  // negotiable and installments: on the listing itself
@@ -519,6 +535,14 @@ const priceBadge = (l) => h("span", { class: "badge ptype " + (l.price_negotiabl
 // What the buyer pays in all (the server adds the installments still due to 1Fit; buyers never see them apart).
 const buyerTotal = (l) => l.price_total || l.price;
 const isPromo = (l) => l.kind === "promo";
+// Whose membership: 1Fit, Ozone, Fitness Embassy, UFC Gym. Old listings have no club: they are all 1Fit.
+const clubOf = (l) => l.club || "1fit";
+const clubName = (code) => ((B.vars.clubs || []).find((c) => c.code === code) || { name: "1Fit" }).name;
+function clubLogo(code) {
+  if (code === "1fit") return h("span", { class: "clogo fit", "aria-hidden": "true" }, "1Fit");
+  return h("span", { class: "clogo", "aria-hidden": "true" }, h("img", { src: "clubs/" + code + ".png", alt: "", loading: "lazy" }));
+}
+const clubTag = (l) => isPromo(l) ? null : h("div", { class: "club-tag" }, clubLogo(clubOf(l)), clubName(clubOf(l)));
 // Months left instead of a tariff name: «12 months» made buyers think they got all 12.
 // «52 дн.» / «7 мес.» from today to an end date — the same rule as the server's remaining().
 function leftFor(endIso) {
@@ -556,9 +580,9 @@ const sumLabel = (l) => T("app.sum") + (l.price_negotiable ? " · " + T("app.neg
 async function fetchCatalog(reset) {
   const c = S.cat;
   const offset = reset ? 0 : c.items.length;
-  const data = await api("GET", "catalog?city=" + encodeURIComponent(c.city) + "&offset=" + offset);
+  const data = await api("GET", "catalog?city=" + encodeURIComponent(c.city) + "&club=" + encodeURIComponent(c.club || "") + "&offset=" + offset);
   c.items = reset ? data.items : c.items.concat(data.items);
-  c.total = data.total; c.cities = data.cities; c.city = data.city; c.loaded = true;
+  c.total = data.total; c.cities = data.cities; c.city = data.city; c.clubs = data.clubs || []; c.club = data.club || ""; c.loaded = true;
 }
 
 function catalogView(view, rev) {
@@ -569,12 +593,18 @@ function catalogView(view, rev) {
     return [head, skeletonRows()];
   }
   const pick = (code) => { c.city = code; c.loaded = false; render(); };
+  const pickClub = (code) => { c.club = code; c.loaded = false; render(); };
+  // Clubs first: a buyer looks for their gym, then for the city.
+  const clubChips = c.clubs.length > 1 || c.club ? h("div", { class: "chips" },
+    h("button", { class: "chip", type: "button", "aria-pressed": String(!c.club), onclick: () => pickClub("") }, T("app.catalog.all_clubs")),
+    c.clubs.map((x) => h("button", { class: "chip", type: "button", "aria-pressed": String(c.club === x.code), onclick: () => pickClub(x.code) },
+      clubLogo(x.code), clubName(x.code), h("span", { class: "n num" }, x.count)))) : null;
   const chips = c.cities.length > 1 || c.city ? h("div", { class: "chips" },
     h("button", { class: "chip", type: "button", "aria-pressed": String(!c.city), onclick: () => pick("") }, T("app.catalog.all")),
     c.cities.map((x) => h("button", { class: "chip", type: "button", "aria-pressed": String(c.city === x.code), onclick: () => pick(x.code) },
       city(x.code), h("span", { class: "n num" }, x.count)))) : null;
   if (!c.items.length) {
-    return [head, chips, h("div", { class: "empty" }, h("p", null, T("app.catalog.empty")), operatorBtn())];
+    return [head, clubChips, chips, h("div", { class: "empty" }, h("p", null, T("app.catalog.empty")), operatorBtn())];
   }
   const more = c.items.length < c.total
     ? h("button", { class: "btn ghost", type: "button", onclick: (e) => busy(e.currentTarget, async () => { await fetchCatalog(false); render(); }) }, T("app.catalog.more"))
@@ -589,7 +619,7 @@ function catalogView(view, rev) {
     const flags = [l === best ? cheapestFlag() : null].filter(Boolean);
     return flags.length ? h("div", { class: "best" }, row, h("div", { class: "flags" }, flags)) : row;
   });
-  return [head, chips, h("div", { class: "stack" }, rows, more)];
+  return [head, clubChips, chips, h("div", { class: "stack" }, rows, more)];
 }
 
 function publicRows(l) {
@@ -624,6 +654,7 @@ function listingView(view, rev) {
   const l = view.data.listing;
   return [
     h("h1", null, T("app.listing", { id: l.id })),
+    clubTag(l),
     h("div", { class: "stack" },
       priceHero(l), publicRows(l),
       l.description ? h("div", { class: "card text" }, l.description) : null,
@@ -660,11 +691,11 @@ function showFieldError(fields, err) {
 function newDraft(l) {
   return l
     ? { id: l.id, city: l.city, tariff: l.tariff, end_date: l.card_end_date || l.end_date, bonus: l.bonus_days ? String(l.bonus_days) : "", start_date: l.start_date || "", price: String(l.price), negotiable: !!l.price_negotiable, description: l.description,
-        kind: l.kind, code: l.promo_code || "", plan: B.limits.plans.includes(l.tariff_days) ? l.tariff_days : null,
+        kind: l.kind, club: clubOf(l), code: l.promo_code || "", plan: B.limits.plans.includes(l.tariff_days) ? l.tariff_days : null,
         freeze: !!l.freeze_days, freezeDays: l.freeze_days ? String(l.freeze_days) : "", paid: l.paid_in_full, monthly: l.monthly_payment ? String(l.monthly_payment) : "", left: l.payments_left ? String(l.payments_left) : "", leftTyped: !!l.payments_left,
         name: l.seller_name, phone: l.seller_phone, shots: l.screenshot_count ? ["keep"] : [], keptShots: l.screenshot_count || 0,  // earlier screenshots stay attached
         fee: l.fee_due ? l.fee : 0 }  // paid once, edited for free
-    : { id: null, city: "", tariff: "", end_date: "", bonus: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shots: [], keptShots: 0, fee: B.vars.fee };
+    : { id: null, city: "", tariff: "", end_date: "", bonus: "", start_date: "", price: "", negotiable: false, description: "", kind: B.vars.promo_enabled ? null : "membership", club: null, code: "", plan: null, freeze: false, freezeDays: "", paid: null, monthly: "", left: "", name: B.user.name, phone: B.user.phone, shots: [], keptShots: 0, fee: B.vars.fee };
 }
 
 function sellForm(d, onDone, onKind) {
@@ -703,6 +734,23 @@ function sellForm(d, onDone, onKind) {
   kindWrap.error = kindErr;
   const code = bind(h("input", { type: "text", maxLength: 40, autocomplete: "off", autocapitalize: "characters", spellcheck: false, value: d.code }), "code");
 
+  // Whose membership: picked first. Only 1Fit has its tariffs, installments, bonus days and a worked-out price.
+  const fit = () => d.kind === "membership" && d.club === "1fit";
+  const clubErr = h("div", { class: "err", hidden: true });
+  const clubGrid = h("div", { class: "club-grid", role: "group", "aria-label": T("app.f.club") },
+    (B.vars.clubs || []).map((c) => h("button", { type: "button", "data-club": c.code, onclick: () => {
+      if (d.club === c.code) return;
+      const wasFit = d.club === "1fit";
+      d.club = c.code; setError(fields.club, "");
+      if (c.code !== "1fit") { d.paid = true; d.plan = null; d.bonus = ""; bonus.value = ""; }
+      else if (!wasFit) d.paid = null;  // 1Fit: fully paid or installments is asked
+      drawKind();
+    } }, clubLogo(c.code), h("span", null, c.name))));
+  const clubWrap = h("div", { class: "field" }, h("span", null, T("app.f.club")), clubGrid,
+    h("div", { class: "hint" }, T("app.sell.club_hint")), clubErr);
+  clubWrap.error = clubErr;
+  const drawClub = () => clubGrid.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.club === b.dataset.club)));
+
   // The 1Fit tariff, picked from 1Fit's own: typed names like «12 months» made buyers think they got all 12.
   const planErr = h("div", { class: "err", hidden: true });
   const planSeg = h("div", { class: "seg", role: "group", "aria-label": T("app.f.plan") },
@@ -739,11 +787,11 @@ function sellForm(d, onDone, onKind) {
   // 1Fit bonus days start after the card's end date: the buyer gets them on top, the price counts them.
   const bonus = digitsInput("bonus", 3, "60");
   bonus.addEventListener("input", () => loadAdvice());
-  const realEnd = () => addDays(d.end_date, d.kind === "membership" ? d.bonus : 0);
+  const realEnd = () => addDays(d.end_date, fit() ? d.bonus : 0);
   const monthly = digitsInput("monthly", 9, "500 000");
   const left = digitsInput("left", 2, "9");
   // Installments: no price to type — it is what is left to pay 1Fit, monthly × payments left.
-  const isInst = () => d.kind === "membership" && d.paid === false;
+  const isInst = () => fit() && d.paid === false;
   const instLine = h("div", { class: "callout", hidden: true });
   const drawInst = () => {
     instLine.hidden = !isInst();
@@ -791,7 +839,7 @@ function sellForm(d, onDone, onKind) {
     priceWarn.hidden = !text;
   };
   // AUTO_PRICE: a membership costs the recommended price; the card shows it instead of a price field.
-  const autoPrice = () => B.vars.auto_price && d.kind === "membership" && d.paid !== false;
+  const autoPrice = () => B.vars.auto_price && fit() && d.paid !== false;
   const drawAuto = () => {
     adviceCard.hidden = false;
     if (!advice) {
@@ -816,7 +864,7 @@ function sellForm(d, onDone, onKind) {
       return;
     }
     // a suggestion from 1Fit's prices today: «Set» takes it, or the seller types their own
-    const show = d.kind === "membership" && !!advice && !isInst();
+    const show = fit() && !!advice && !isInst();
     adviceCard.hidden = !show;
     if (!show) { drawAdviceCheck(); return; }
     const use = h("button", { class: "btn small", type: "button", onclick: () => { setPrice(String(advice.recommended)); haptic("success"); } },
@@ -834,7 +882,7 @@ function sellForm(d, onDone, onKind) {
   const loadAdvice = () => {
     clearTimeout(adviceTimer);
     adviceTimer = setTimeout(async () => {
-      if (d.kind !== "membership" || !d.end_date || !d.plan || isInst()) { advice = null; drawAdvice(); return; }
+      if (!fit() || !d.end_date || !d.plan || isInst()) { advice = null; drawAdvice(); return; }
       const req = ++adviceReq;
       try {
         const res = await api("POST", "advice", { end_date: d.end_date, bonus_days: d.bonus || 0, paid_in_full: d.paid, tariff_days: d.plan,
@@ -871,6 +919,7 @@ function sellForm(d, onDone, onKind) {
         n < MAX_SHOTS ? h("button", { class: "btn small", type: "button", onclick: () => file.click() }, T("app.sell.shot_add")) : null));
   };
   const applyRead = (read) => {
+    if (!fit()) return;  // the reader knows 1Fit's card only
     const filled = [];
     if (read.tariff_days && !d.plan && B.limits.plans.includes(read.tariff_days)) {
       d.plan = read.tariff_days; drawPlan(); filled.push(T("app.f.plan"));
@@ -915,6 +964,7 @@ function sellForm(d, onDone, onKind) {
   const fields = {
     screenshot: shotRow,
     kind: kindWrap,
+    club: clubWrap,
     promo_code: field(T("app.f.code"), code, { hint: "🔒 " + T("app.sell.code_hint") }),
     city: field(T("app.f.city"), citySel),
     tariff_days: planWrap,
@@ -933,6 +983,7 @@ function sellForm(d, onDone, onKind) {
   const priceHint = fields.price.querySelector(".hint");
   const label = (wrap) => wrap.querySelector("span");
   const payCard = h("div", { class: "card" }, fields.payment, fields.monthly_payment, fields.payments_left);
+  const clubCard = h("div", { class: "card" }, fields.club);
   const freezeCard = h("div", { class: "card" }, freezeRow, fields.freeze_days, fields.bonus_days);
   const drawFreeze = () => { fields.freeze_days.hidden = !d.freeze; };
   const drawPriceMode = () => { fields.price.hidden = autoPrice() || isInst(); drawInst(); };
@@ -950,10 +1001,13 @@ function sellForm(d, onDone, onKind) {
     kindSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(d.kind === b.dataset.kind)));
     fields.kind.hidden = !!d.id;  // an existing listing keeps what it sells
     fields.promo_code.hidden = !promo;
-    fields.tariff_days.hidden = promo;
+    clubCard.hidden = promo;
+    drawClub();
+    fields.tariff_days.hidden = !fit();
     drawPlan();
-    payCard.hidden = promo;
+    payCard.hidden = !fit();
     freezeCard.hidden = promo;
+    fields.bonus_days.hidden = !fit();
     drawFreeze(); drawPriceMode(); drawDate();
     fields.tariff.hidden = !promo;  // only a promo code says what it gives
     label(fields.end_date).textContent = T(promo ? "app.f.date_promo" : "app.f.date");
@@ -964,12 +1018,13 @@ function sellForm(d, onDone, onKind) {
   const summaryRows = () => {
     const p = Number(d.price), membership = d.kind === "membership";
     return [
-      membership ? [T("app.f.plan"), T("app.plan.short." + d.plan)] : [T("app.f.what_promo"), d.tariff],
+      membership ? [T("app.f.club"), clubName(d.club)] : [T("app.f.what_promo"), d.tariff],
+      fit() ? [T("app.f.plan"), T("app.plan.short." + d.plan)] : null,
       d.end_date ? [membership ? "📦 " + T("app.confirm.giving") : T("app.f.date_promo"),
         membership ? T("app.confirm.giving_v", { left: leftFor(realEnd()), date: dmy(realEnd()) }) : dmy(d.end_date), membership] : null,
       membership ? ["❄️ " + T("app.f.freeze_short"), d.freeze ? T("app.freeze_row", { days: d.freezeDays }) : T("app.confirm.none")] : null,
-      membership && Number(d.bonus) ? ["🎁 " + T("app.f.bonus_short"), T("app.bonus_row", { days: d.bonus })] : null,
-      membership ? [T("app.f.pay_short"), d.paid === false
+      fit() && Number(d.bonus) ? ["🎁 " + T("app.f.bonus_short"), T("app.bonus_row", { days: d.bonus })] : null,
+      fit() ? [T("app.f.pay_short"), d.paid === false
         ? T("app.pay.installment_row", { monthly: money(d.monthly), left: d.left }) : T("app.pay.full_row")] : null,
       [T("app.f.price"), money(p) + " " + T("app.sum") + (d.negotiable ? " · " + T("app.negotiable") : ""), true],
       ["📢 " + T("app.my.contacts"), [d.name, d.phone, B.user.username ? "@" + B.user.username : null].filter(Boolean).join(", ")],
@@ -982,18 +1037,20 @@ function sellForm(d, onDone, onKind) {
     e.preventDefault();
     if (submit.disabled) return;
     if (!d.kind) { showFieldError(fields, { field: "kind", message: T("app.err.kind") }); return; }
-    if (d.kind === "membership" && !d.plan) { showFieldError(fields, { field: "tariff_days", message: T("app.err.plan") }); return; }
-    if (d.kind === "membership" && d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
+    if (d.kind === "membership" && !d.club) { showFieldError(fields, { field: "club", message: T("app.err.club") }); return; }
+    if (fit() && !d.plan) { showFieldError(fields, { field: "tariff_days", message: T("app.err.plan") }); return; }
+    if (fit() && d.paid == null) { showFieldError(fields, { field: "payment", message: T("app.err.payment") }); return; }
     if (d.kind === "membership" && d.freeze && !Number(d.freezeDays)) { showFieldError(fields, { field: "freeze_days", message: T("app.err.freeze_days") }); return; }
     if (B.vars.shot_required && !shotCount()) { shotRow.classList.add("invalid"); showFieldError(fields, { field: "screenshot", message: T("app.err.shot_required") }); return; }
     if (!(await confirmSheet(T("app.confirm.title"), summaryRows().filter(Boolean),
       T("app.confirm.ok"), T("app.confirm.back")))) return;
     submit.disabled = true;
-    const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null,
+    const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: fit() ? d.plan : null,
+                   club: d.kind === "membership" ? d.club : null,
                    freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date,
-                   bonus_days: d.kind === "membership" ? d.bonus || 0 : 0, start_date: null, price: d.price, price_negotiable: d.negotiable,
+                   bonus_days: fit() ? d.bonus || 0 : 0, start_date: null, price: d.price, price_negotiable: d.negotiable,
                    kind: d.kind, promo_code: d.kind === "promo" ? d.code : null,
-                   paid_in_full: d.paid, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
+                   paid_in_full: fit() ? d.paid : true, monthly_payment: d.paid === false ? d.monthly : null, payments_left: d.paid === false ? d.left : null,
                    description: d.description, name: d.name, phone: d.phone, screenshots: d.shots };
     const send = () => (d.id ? api("PUT", "listings/" + d.id, body) : api("POST", "listings", body));
     try {
@@ -1010,6 +1067,7 @@ function sellForm(d, onDone, onKind) {
     }
   } },
     d.id || !B.vars.promo_enabled ? null : h("div", { class: "card" }, fields.kind),
+    clubCard,
     h("div", { class: "card" }, shotRow, file),
     h("div", { class: "card" }, fields.city, fields.tariff_days, fields.tariff, fields.end_date, fields.promo_code),
     payCard,
@@ -1024,7 +1082,8 @@ function sellForm(d, onDone, onKind) {
       h("button", { class: "btn ghost", type: "button", onclick: () => {
         try { tg.openLink(B.vars.instagram); } catch (e) { window.open(B.vars.instagram, "_blank"); }
       } }, T("app.sell.instagram_btn"))) : null,
-    submit);
+    submit,
+    d.id ? null : legalNote());
   drawCounter(); drawKind(); drawShot();
   return form;
 }
@@ -1164,6 +1223,14 @@ function langSwitch() {
     h("button", { type: "button", title: x.name, "aria-label": x.name, "aria-pressed": String(x.code === B.lang), onclick: (e) => setLang(x.code, e.currentTarget) }, x.code.toUpperCase())));
 }
 
+// «Sending it, you accept the offer and the user agreement»: the documents open in the browser.
+function openDoc(name) {
+  const url = new URL(name + "?lang=" + B.lang, document.baseURI).href;
+  try { tg.openLink(url); } catch (e) { window.open(url, "_blank"); }
+}
+const docLink = (name, key) => h("a", { href: "#", onclick: (e) => { e.preventDefault(); openDoc(name); } }, T(key));
+const legalNote = () => h("p", { class: "note legal" }, T("app.legal.accept"), " ", docLink("offer", "app.legal.offer_link"),
+  " " + T("app.legal.and") + " ", docLink("terms", "app.legal.terms_link"), ".");
 function moreView() {
   return [
     h("h2", { style: "margin-top:0" }, T("app.more.how")),
@@ -1172,6 +1239,10 @@ function moreView() {
     h("p", { class: "note" }, T("app.how.note2")),
     h("h2", null, T("app.more.support")),
     h("div", { class: "stack" }, h("p", { class: "note", style: "margin-top:0" }, T("app.more.support_text")), operatorBtn(true)),
+    h("h2", null, "📄 " + T("app.more.docs")),
+    h("div", { class: "stack" },
+      h("button", { class: "btn ghost", type: "button", onclick: () => openDoc("offer") }, T("app.legal.offer_title")),
+      h("button", { class: "btn ghost", type: "button", onclick: () => openDoc("terms") }, T("app.legal.terms_title"))),
   ];
 }
 

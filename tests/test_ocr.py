@@ -120,6 +120,7 @@ async def test_bot_offers_the_values_read_off_the_screenshots(h, monkeypatch):
     await h.click(SELLER, "lang:ru")
     await h.send(SELLER, "➕ Продать абонемент")
     await h.click(SELLER, "sl:kind:membership")
+    await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
     await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, end.strftime("%d.%m.%Y"))

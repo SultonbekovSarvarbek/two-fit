@@ -13,6 +13,7 @@ from typing import Any
 
 import aiosqlite
 
+from .clubs import CLUBS, FIT, is_fit
 from .pricing import advise, normalize_prices
 from .usage import DAYS_PER_MONTH, with_bonus
 from .validators import TARIFF_PLANS
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS listings (
     seller_id                 INTEGER NOT NULL REFERENCES users(id),
     lang                      TEXT NOT NULL,
     kind                      TEXT NOT NULL DEFAULT 'membership',  -- membership | promo
+    club                      TEXT NOT NULL DEFAULT '1fit',  -- whose membership: clubs.CLUBS (1fit, ozone, ...)
     promo_code                TEXT,               -- promo: the code itself, only the admin and the seller see it
     city                      TEXT NOT NULL,
     tariff                    TEXT NOT NULL,
@@ -297,6 +299,8 @@ class Repo:
             await self.db.execute("ALTER TABLE listings ADD COLUMN commission_percent INTEGER")
             await self.db.execute(
                 "UPDATE listings SET commission_percent = CASE kind WHEN 'promo' THEN 30 ELSE 10 END")
+        if "club" not in columns:  # every listing before other clubs came was a 1Fit one
+            await self.db.execute("ALTER TABLE listings ADD COLUMN club TEXT NOT NULL DEFAULT '1fit'")
         if "fee_amount" not in columns:  # listings placed before the fee were free
             await self.db.execute("ALTER TABLE listings ADD COLUMN fee_amount INTEGER")
         async with self.db.execute("PRAGMA table_info(fee_payments)") as cur:
@@ -421,6 +425,10 @@ class Repo:
             return  # a promo code has no start date and no installments: they are not stored
         if draft.get("start_date") and draft["start_date"] >= draft["end_date"]:
             raise RepoError("bad_start")
+        if draft.get("club", FIT) not in CLUBS:
+            raise RepoError("incomplete")
+        if not is_fit(draft):
+            return  # other clubs: no 1Fit tariff and no 1Fit installments
         if draft.get("tariff_days") not in TARIFF_PLANS:  # 6, 12 or 24 months: picked, not typed
             raise RepoError("incomplete")
         # Fully paid or installment must be stated: «9 months, 500 000» meant 500 000 every month.
@@ -432,7 +440,11 @@ class Repo:
 
     @staticmethod
     def _bonus(draft: dict[str, Any]) -> int:
-        return int(draft.get("bonus_days") or 0) if draft.get("kind") != LK.PROMO else 0
+        return int(draft.get("bonus_days") or 0) if draft.get("kind") != LK.PROMO and is_fit(draft) else 0
+
+    @staticmethod
+    def _club(draft: dict[str, Any]) -> str:
+        return FIT if draft.get("kind") == LK.PROMO else (draft.get("club") or FIT)
 
     @staticmethod
     def _end(draft: dict[str, Any]) -> str:
@@ -449,6 +461,8 @@ class Repo:
         """kind, promo_code, tariff_days, freeze_days, start_date, paid_in_full, monthly_payment, payments_left."""
         if draft.get("kind") == LK.PROMO:
             return LK.PROMO, draft["promo_code"], None, None, None, None, None, None
+        if not is_fit(draft):  # another club: paid for, no 1Fit tariff
+            return LK.MEMBERSHIP, None, None, draft.get("freeze_days"), draft.get("start_date"), 1, None, None
         return (LK.MEMBERSHIP, None, draft["tariff_days"], draft.get("freeze_days"), draft.get("start_date"),
                 *Repo._payment(draft))
 
@@ -498,7 +512,7 @@ class Repo:
     def _auto_fields(draft: dict[str, Any]) -> tuple[int, str | None]:
         """price_auto, payments_as_of: whether the price follows the days, and when payments_left was stated."""
         membership = draft.get("kind") != LK.PROMO
-        auto = int(bool(draft.get("price_auto")) and membership)
+        auto = int(bool(draft.get("price_auto")) and membership and is_fit(draft))  # the advice is 1Fit's only
         installment = membership and draft.get("paid_in_full") in (False, 0) and draft.get("paid_in_full") is not None
         return auto, (today_local().isoformat() if installment and draft.get("payments_left") else None)
 
@@ -519,8 +533,8 @@ class Repo:
                        paid_in_full, monthly_payment, payments_left, price, price_negotiable,
                        description, screenshot_file_id, seller_name, seller_phone, commission_accepted_price,
                        commission_percent, price_auto, payments_as_of, screenshots, ocr, status, created_at, updated_at,
-                       fee_amount, bonus_days)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       fee_amount, bonus_days, club)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     seller_id, lang, draft["city"], self._tariff(draft), self._end(draft), *self._kind_fields(draft),
                     draft["price"], int(bool(draft.get("price_negotiable"))),
@@ -528,6 +542,7 @@ class Repo:
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
                     self.percent_for(draft.get("kind")), *self._auto_fields(draft), *self._shots(draft)[1:],
                     LS.UNPAID if fee > 0 else LS.PENDING, ts, ts, fee if fee > 0 else None, self._bonus(draft),
+                    self._club(draft),
                 ),
             )
             listing_id = cur.lastrowid
@@ -549,7 +564,7 @@ class Repo:
                        paid_in_full=?, monthly_payment=?, payments_left=?, price=?, price_negotiable=?, description=?,
                        screenshot_file_id=?, seller_name=?, seller_phone=?, commission_accepted_price=?, commission_percent=?,
                        price_auto=?, payments_as_of=?, screenshots=?, ocr=?, status=?, reject_reason=NULL, published_at=NULL, sale_reported_at=NULL, updated_at=?,
-                       bonus_days=?
+                       bonus_days=?, club=?
                    WHERE id=?""",
                 (
                     lang, draft["city"], self._tariff(draft), self._end(draft), *self._kind_fields(draft), draft["price"],
@@ -557,7 +572,7 @@ class Repo:
                     draft.get("description") or "", self._shots(draft)[0],
                     draft["seller_name"], draft.get("seller_phone") or "", draft["price"],
                     self.percent_for(draft.get("kind")), *self._auto_fields(draft), *self._shots(draft)[1:],
-                    status, now_iso(), self._bonus(draft), listing_id,
+                    status, now_iso(), self._bonus(draft), self._club(draft), listing_id,
                 ),
             )
             await self._log(listing_id, seller_id, "edited", price=draft["price"])
@@ -752,7 +767,7 @@ class Repo:
                 and (self.promo_enabled or listing["kind"] != LK.PROMO))
 
     async def catalog(self, city: str | None, limit: int, offset: int,
-                      today: date | None = None) -> tuple[list[dict[str, Any]], int]:
+                      today: date | None = None, club: str | None = None) -> tuple[list[dict[str, Any]], int]:
         params: dict[str, Any] = {"st": LS.APPROVED, "today": (today or today_local()).isoformat(),
                                   "sold": LS.SOLD, "since": self._sold_since()}
         where = ("((status=:st AND end_date>=:today) OR (status=:sold AND sale_reported_at>=:since))"
@@ -760,6 +775,9 @@ class Repo:
         if city:
             where += " AND city=:city"
             params["city"] = city
+        if club:
+            where += " AND club=:club"
+            params["club"] = club
         total = await self._scalar(f"SELECT COUNT(*) FROM listings WHERE {where}", params)
         rows = await self._all(
             # cheapest first, by the price buyers see: installments cost monthly × payments left
@@ -772,6 +790,14 @@ class Repo:
 
     def _kind_filter(self) -> str:
         return "" if self.promo_enabled else f" AND kind != '{LK.PROMO}'"
+
+    async def catalog_clubs(self, today: date | None = None) -> list[tuple[str, int]]:
+        """Clubs with memberships on sale now and how many, in the order of ``CLUBS``."""
+        rows = await self._all(
+            "SELECT club, COUNT(*) AS n FROM listings WHERE status=? AND end_date>=?" + self._kind_filter()
+            + " GROUP BY club", (LS.APPROVED, (today or today_local()).isoformat()))
+        counts = {r["club"]: r["n"] for r in rows}
+        return [(c, counts[c]) for c in CLUBS if counts.get(c)]
 
     async def catalog_cities(self, today: date | None = None) -> list[tuple[str, int]]:
         rows = await self._all(

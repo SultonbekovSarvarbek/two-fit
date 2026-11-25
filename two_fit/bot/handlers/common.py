@@ -10,7 +10,7 @@ from ...pricing import DISCOUNT_PERCENT
 from ..callbacks import NOOP, LangCb
 from ..context import Ctx
 from ..middlewares import Btn
-from ..ui import btn, kb, lang_kb, main_menu, open_app_kb
+from ..ui import btn, kb, lang_kb, legal_links, main_menu, open_app_kb
 
 menu_router = Router(name="menu")
 fallback_router = Router(name="fallback")
@@ -83,7 +83,7 @@ async def menu_how(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await state.clear()
     await message.answer(
         ctx.t("how.text", price_note=ctx.t("how.price", discount=DISCOUNT_PERCENT) if ctx.cfg.auto_price else "",
-              pay_note=ctx.t("how.pay")),
+              pay_note=ctx.t("how.pay")) + legal_links(ctx),
         reply_markup=kb([btn(ctx.t("support.btn"), url=ctx.cfg.support_url)]),
     )
 
