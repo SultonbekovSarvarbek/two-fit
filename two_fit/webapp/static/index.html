@@ -440,8 +440,15 @@ async function busy(button, fn) {
 
 /* ---------------------------------------------------------------- navigation */
 function current() { return S.stack.length ? S.stack[S.stack.length - 1] : { name: S.tab }; }
-function go(view) { S.stack.push(view); render(); }
-function back() { S.stack.pop(); render(); }
+// «Back» returns to the same place in the list: each screen keeps how far it was scrolled when left.
+const scrolls = {};
+const scrollKey = () => S.stack.length + ":" + (S.stack.length ? current().name : S.tab);
+function go(view) { scrolls[scrollKey()] = window.scrollY; S.stack.push(view); render(); }
+function back() {
+  S.stack.pop(); render();
+  const y = scrolls[scrollKey()];
+  if (y) { window.scrollTo(0, y); requestAnimationFrame(() => window.scrollTo(0, y)); }
+}
 function replace(view) { S.stack[S.stack.length - 1] = view; render(); }
 function switchTab(tab) { S.tab = tab; S.stack = []; render(); }
 
