@@ -330,7 +330,7 @@ def draft_shown(d: dict) -> dict:
 
 def preview_kb(ctx: Ctx, data: dict, fee: int = 0) -> InlineKeyboardMarkup:
     negotiable = bool((data.get("draft") or {}).get("price_negotiable"))
-    send = ctx.t("sell.send_pay", fee=fmt_money(fee)) if fee else ctx.t("sell.send")
+    send = ctx.t("sell.send")  # always «to moderation»: the fee is paid on the next screen
     return kb(
         [btn(ctx.t("sell.negotiable_on" if negotiable else "sell.negotiable_off"), SellCb(action="negotiable"))],
         [btn(send, SellCb(action="send"))],

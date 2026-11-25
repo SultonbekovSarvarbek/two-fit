@@ -970,8 +970,7 @@ function sellForm(d, onDone, onKind) {
       d.fee ? ["💳 " + T("app.sell.pay_label"), money(d.fee) + " " + T("app.sum"), true] : null,
     ];
   };
-  const submit = h("button", { class: "btn", type: "submit" },
-    d.fee ? T("app.sell.submit_pay", { fee: money(d.fee) }) : T("app.sell.submit"));
+  const submit = h("button", { class: "btn", type: "submit" }, T("app.sell.submit"));
   const form = h("form", { class: "stack", novalidate: true, onsubmit: async (e) => {
     e.preventDefault();
     if (submit.disabled) return;
@@ -981,7 +980,7 @@ function sellForm(d, onDone, onKind) {
     if (d.kind === "membership" && d.freeze && !Number(d.freezeDays)) { showFieldError(fields, { field: "freeze_days", message: T("app.err.freeze_days") }); return; }
     if (B.vars.shot_required && !shotCount()) { shotRow.classList.add("invalid"); showFieldError(fields, { field: "screenshot", message: T("app.err.shot_required") }); return; }
     if (!(await confirmSheet(T("app.confirm.title"), summaryRows().filter(Boolean),
-      d.fee ? T("app.sell.submit_pay", { fee: money(d.fee) }) : T("app.confirm.ok"), T("app.confirm.back")))) return;
+      T("app.confirm.ok"), T("app.confirm.back")))) return;
     submit.disabled = true;
     const body = { city: d.city, tariff: d.kind === "promo" ? d.tariff : null, tariff_days: d.kind === "membership" ? d.plan : null,
                    freeze_days: d.kind === "membership" && d.freeze ? d.freezeDays : 0, end_date: d.end_date,
@@ -993,10 +992,11 @@ function sellForm(d, onDone, onKind) {
     try {
       const res = await send();
       B.user = Object.assign({}, B.user, { name: (d.name || "").trim(), phone: (d.phone || "").trim() });
-      // Saved; an unpaid one goes to moderation once Telegram takes the fee.
-      const paid = "invoice_url" in res ? await payInvoice(res.invoice_url) : null;
-      haptic(paid && paid !== "paid" ? "warning" : "success");
-      onDone(res.id, paid);
+      haptic("success");
+      // Saved; an unpaid one goes to moderation once the fee is paid: on to the payment screen.
+      if ("invoice_url" in res) { S.draft = null; S.my = null; S.cat.loaded = false;
+        S.tab = "my"; S.stack = [{ name: "pay", id: res.id, fee: d.fee, url: res.invoice_url }]; render(); return; }
+      onDone(res.id, null);
     } catch (err) {
       submit.disabled = false;
       showFieldError(fields, err);
@@ -1030,6 +1030,32 @@ function afterSubmit(id, paid) {
   toast(paid == null ? T("app.sell.sent", { id }) : paid === "paid" ? T("app.my.paid")
         : paid === "pending" ? T("app.pay.external") : T("app.sell.unpaid_text"));
 }
+// «Оплатите размещение»: right after «Send to moderation» for an unpaid listing. The listing is saved;
+// it reaches the moderators once the fee is paid. «Later» leaves it in «My», where it can be paid any time.
+function payView(view) {
+  const toMy = (text) => { S.my = null; S.stack = []; S.tab = "my"; render(); if (text) toast(text); };
+  const pay = h("button", { class: "btn", type: "button", onclick: (e) => busy(e.currentTarget, async () => {
+    const url = view.url || (await api("POST", "listings/" + view.id + "/invoice")).invoice_url;
+    view.url = null;  // a fresh link next time: an invoice link may be used once
+    const status = await payInvoice(url);
+    if (status === "pending") { toast(T("app.pay.external")); return; }
+    if (status !== "paid") { haptic("warning"); return; }
+    haptic("success"); toMy(T("app.my.paid"));
+  }) }, "💳 " + T("app.payv.btn", { fee: money(view.fee) }));
+  return [
+    h("h1", null, T("app.payv.title")),
+    h("div", { class: "stack" },
+      h("div", { class: "callout" },
+        h("div", { style: "font-weight:600" }, T("app.payv.saved", { id: view.id })),
+        h("div", { style: "margin-top:4px" }, T("app.payv.text", { fee: money(view.fee) }))),
+      h("div", { class: "card rows" },
+        h("div", { class: "strong" }, h("span", { class: "k" }, T("app.sell.pay_label")),
+          h("span", { class: "v num" }, money(view.fee) + " " + T("app.sum")))),
+      pay,
+      h("p", { class: "note", style: "margin:0 4px" }, T("app.payv.note")),
+      h("button", { class: "btn ghost", type: "button", onclick: () => toMy(T("app.sell.unpaid_text")) }, T("app.payv.later"))),
+  ];
+}
 function sellView() {
   if (!S.draft) S.draft = newDraft(null);
   // The title and the intro follow the choice: a membership or a promo code.
@@ -1041,7 +1067,7 @@ function sellView() {
   };
   // Placing a listing is paid: say how much before the seller fills anything in.
   const fee = B.vars.fee ? h("div", { class: "callout", style: "margin:0 0 14px" },
-    "💳 " + T("app.sell.fee", { fee: money(B.vars.fee) })) : null;
+    T("app.sell.fee", { fee: money(B.vars.fee) })) : null;
   return [title, fee, intro, sellForm(S.draft, afterSubmit, onKind)];
 }
 function editView(view) {
@@ -1139,7 +1165,7 @@ function moreView() {
   ];
 }
 
-const VIEWS = { catalog: catalogView, listing: listingView, sell: sellView, edit: editView, my: myView, mine: mineView, more: moreView };
+const VIEWS = { catalog: catalogView, listing: listingView, sell: sellView, edit: editView, my: myView, mine: mineView, pay: payView, more: moreView };
 
 /* ---------------------------------------------------------------- start */
 function gate(lines, retry) {
