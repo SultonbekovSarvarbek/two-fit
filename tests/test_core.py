@@ -201,7 +201,7 @@ async def test_seller_marks_it_sold(repo):
         await repo.mark_sold(lid, 2)
     await repo.mark_sold(lid, 1)
     assert (await repo.get_listing(lid))["status"] == LS.SOLD
-    rows, total = await repo.catalog(None, 10, 0)  # a week in the list as «Sold»: proof that deals happen here
+    rows, total = await repo.catalog(None, 10, 0)  # a month in the list as «Sold»: proof that deals happen here
     assert total == 1 and rows[0]["status"] == LS.SOLD and repo.is_sold_shown(rows[0]) and not repo.is_available(rows[0])
     await repo.db.execute("UPDATE listings SET sale_reported_at='2020-01-01T00:00:00+00:00' WHERE id=?", (lid,))
     assert (await repo.catalog(None, 10, 0))[1] == 0
@@ -226,8 +226,8 @@ async def test_catalog_hides_expired_unpaid_sold_withdrawn(repo):
     await repo.create_listing(1, "ru", draft(), fee=30_000)  # unpaid
     later = today_local() + timedelta(days=400)  # past every end_date
     rows, total = await repo.catalog(None, 10, 0)
-    assert total == 3 and rows[-1]["id"] == ids[1]  # the sold one is shown last, for a week
-    assert (await repo.catalog(None, 10, 0, today=later))[1] == 1  # expired ones go; the sold one stays its week
+    assert total == 3 and rows[-1]["id"] == ids[1]  # the sold one is shown last, for a month
+    assert (await repo.catalog(None, 10, 0, today=later))[1] == 1  # expired ones go; the sold one stays its month
     assert not repo.is_available(await repo.get_listing(ids[2]), today=later)
 
 

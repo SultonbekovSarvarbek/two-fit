@@ -740,7 +740,7 @@ class Repo:
             "SELECT * FROM payme_transactions WHERE payme_time BETWEEN ? AND ? ORDER BY payme_time", (start, end))
 
     # ---------------------------------------------------------------- catalog
-    SOLD_SHOWN_DAYS = 7  # a sold listing stays in the catalog this long, marked «Sold», without contacts
+    SOLD_SHOWN_DAYS = 30  # a sold listing stays in the catalog this long, marked «Sold», without contacts
 
     @classmethod
     def _sold_since(cls) -> str:

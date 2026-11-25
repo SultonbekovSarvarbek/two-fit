@@ -120,7 +120,7 @@ def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = Non
     view = {k: listing[k] for k in ("id", "city", "tariff", "end_date", "start_date", "price", "description")}
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["kind"] = listing["kind"]  # the promo code itself is never public
-    view["sold"] = listing["status"] == LS.SOLD  # shown a few days with the «Sold» badge, never with contacts
+    view["sold"] = listing["status"] == LS.SOLD  # shown a month with the «Sold» badge, never with contacts
     view["tariff_days"] = listing["tariff_days"]  # 180 / 365 / 730, None on old listings
     view["freeze_days"] = listing["freeze_days"]  # unused freeze days the buyer gets; 0 none, None not asked
     view["bonus_days"] = listing["bonus_days"] or 0  # 1Fit bonus days, already in end_date

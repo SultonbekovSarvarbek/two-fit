@@ -115,8 +115,8 @@ async def test_full_happy_path(h):
     assert "Найдено: 1" in texts(await h.click(BUYER, "cat:0:tashkent"))
     assert "В городе Бухара пока нет" in texts(await h.click(BUYER, "cat:0:bukhara"))
 
-    # --- the seller sold it: the admin hears, buyers see «Sold» for a week without the contacts
-    assert "7 кун" in texts(await h.click(SELLER, "my:sold:1:0"))
+    # --- the seller sold it: the admin hears, buyers see «Sold» for a month without the contacts
+    assert "30 кун" in texts(await h.click(SELLER, "my:sold:1:0"))
     sold = await h.click(SELLER, "my:sold!:1:0")
     assert "сотилди деб белгиланди" in texts(sold)
     assert "отметил объявление №1 как проданное" in h.texts_to(ADMIN) and "Открыли контакты: 1" in h.texts_to(ADMIN)
@@ -126,7 +126,7 @@ async def test_full_happy_path(h):
     card = texts(await h.click(BUYER, "card:1:0:"))
     assert "Продано" in card and "+998" not in card and "tg://" not in card
     await h.repo.db.execute("UPDATE listings SET sale_reported_at='2020-01-01T00:00:00+00:00' WHERE id=1")
-    assert "Пока нет" in texts(await h.send(BUYER, "🏋️ Все абонементы"))  # a week later it is gone
+    assert "Пока нет" in texts(await h.send(BUYER, "🏋️ Все абонементы"))  # a month later it is gone
     assert any("недоступно" in a for a in alerts(await h.click(BUYER, "card:1:0:")))
     stats = texts(await h.click(ADMIN, "ad:stats:0:0:"))
     assert "Продано: 1" in stats and "Оплат размещения: 0" in stats
