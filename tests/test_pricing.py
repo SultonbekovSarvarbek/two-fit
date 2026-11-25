@@ -40,16 +40,16 @@ async def h(tmp_path):
 
 # ------------------------------------------------------------------ the formula
 @pytest.mark.parametrize("days, base, recommended, max_price", [
-    (600, 730, 8_510_000, 8_510_000),   # 24-month membership, most of it left
-    (300, 365, 5_510_000, 5_510_000),   # the buyer would otherwise buy 12 months
-    (170, 180, 4_720_000, 4_720_000),   # 5 months 20 days: compared with 6 months
-    (135, 180, 3_750_000, 3_750_000),   # 4 months 15 days
-    (60, 90, 2_770_000, 2_770_000),     # under 3 months: compared with the 3-month tariff
+    (600, 730, 8_010_000, 8_510_000),   # 24-month membership, most of it left
+    (300, 365, 5_180_000, 5_510_000),   # the buyer would otherwise buy 12 months
+    (170, 180, 4_450_000, 4_720_000),   # 5 months 20 days: compared with 6 months
+    (135, 180, 3_530_000, 3_750_000),   # 4 months 15 days
+    (60, 90, 2_600_000, 2_770_000),     # under 3 months: compared with the 3-month tariff
 ])
 def test_advice_follows_the_cheapest_1fit_tariff(days, base, recommended, max_price):
     a = advise(end_in(days), TODAY)
     assert (a.base_days, a.recommended, a.max_price) == (base, recommended, max_price)
-    assert a.saving(a.recommended) == 15  # the advised price is about 15% cheaper than 1Fit per month
+    assert a.saving(a.recommended) == 20  # the advised price is about 20% cheaper than 1Fit per month
     assert not a.too_high(max_price) and a.too_high(max_price + 1)
 
 
@@ -533,7 +533,7 @@ async def test_how_it_works_explains_the_automatic_price(tmp_path):
             how = texts(await h.send(SELLER, "ℹ️ Как это работает"))
             assert ("Как считается цена" in how) is auto
             if auto:
-                assert "текущие цены 1Fit" in how and "на 15% дешевле" in how and "комисси" not in how.lower()
+                assert "текущие цены 1Fit" in how and "на 20% дешевле" in how and "комисси" not in how.lower()
                 assert how.index("Как считается цена") < how.index("не партнёр 1Fit")  # right after the steps
         finally:
             await h.stop()
@@ -555,7 +555,7 @@ def test_seller_tariff_does_not_lower_the_base():
     a = advise(end_in(147), TODAY, plan_days=365)
     assert a.base_days == 180 and a.fit_value == round(147 / 180 * 5_890_000)
     with_installments = advise(end_in(147), TODAY, None, 532_500, 5, plan_days=365)
-    assert with_installments.recommended == 1_420_000
+    assert with_installments.recommended == 1_180_000
 
 
 async def test_installment_price_follows_the_payments_left(h):
@@ -652,12 +652,12 @@ async def test_bonus_days_come_on_top_in_the_mini_app(tmp_path):
             _, adv = await api.call("POST", "/api/advice", SELLER,
                                     {"end_date": card, "bonus_days": 30, "paid_in_full": True, "tariff_days": 365})
             a = advise(real, today_local(), plan_days=365)
-            assert adv["advice"]["days_left"] == 180 and adv["advice"]["recommended"] == a.recommended == 5_000_000
+            assert adv["advice"]["days_left"] == 180 and adv["advice"]["recommended"] == a.recommended == 4_710_000
 
             status, made = await api.call("POST", "/api/listings", SELLER, draft(end_date=card, bonus_days=30))
             assert status == 201, made
             listing = await h.repo.get_listing(made["id"])
-            assert (listing["end_date"], listing["bonus_days"], listing["price"]) == (real, 30, 5_000_000)
+            assert (listing["end_date"], listing["bonus_days"], listing["price"]) == (real, 30, 4_710_000)
 
             _, mine = await api.call("GET", "/api/my", SELLER)
             item = mine["items"][0]
