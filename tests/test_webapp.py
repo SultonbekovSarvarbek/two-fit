@@ -200,7 +200,7 @@ async def test_catalog_shows_only_public_fields(h, api):
     for item in cat["items"]:
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
                              "description", "price_total", "kind", "left",
-                             "month_cost", "tariff_days", "freeze_days", "bonus_days", "card_end_date", "sold", "club"}
+                             "month_cost", "tariff_days", "freeze_days", "bonus_days", "card_end_date", "sold", "club", "verified"}
         # No start date, but the 12-month tariff gives it: «used 5 of 12 months» still shows.
         assert item["start_date"] is None and item["tariff_days"] == 365 and item["usage"]["total"] == 12
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)

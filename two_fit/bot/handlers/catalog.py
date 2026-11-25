@@ -58,6 +58,7 @@ async def render_catalog(ctx: Ctx, page: int, flt: str) -> tuple[str, InlineKeyb
         [btn(
             ctx.t("catalog.item", id=r["id"], club=club_name(r["club"]), city=ctx.i18n.city(ctx.lang, r["city"]),
                   price=fmt_money(buyer_total(r)))
+            + (ctx.t("catalog.verified") if r["fee_paid_at"] and r["status"] != "sold" else "")
             + (ctx.t("catalog.promo") if r["kind"] == "promo" else "")
             + (ctx.t("catalog.sold") if r["status"] == "sold" else ""),
             CardCb(id=r["id"], page=page, city=flt),

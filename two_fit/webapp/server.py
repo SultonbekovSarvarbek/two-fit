@@ -136,6 +136,7 @@ def public_view(listing: dict[str, Any], fit_prices: dict[int, int] | None = Non
     view["price_negotiable"] = bool(listing["price_negotiable"])
     view["kind"] = listing["kind"]  # the promo code itself is never public
     view["club"] = listing["club"] or FIT  # whose membership: 1fit, ozone, embassy, ufc
+    view["verified"] = bool(listing["fee_paid_at"])  # the listing fee is paid: shown as «✓ Checked»
     view["sold"] = listing["status"] == LS.SOLD  # shown a month with the «Sold» badge, never with contacts
     view["tariff_days"] = listing["tariff_days"]  # 180 / 365 / 730, None on old listings
     view["freeze_days"] = listing["freeze_days"]  # unused freeze days the buyer gets; 0 none, None not asked

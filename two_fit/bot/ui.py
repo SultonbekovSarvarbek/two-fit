@@ -148,6 +148,8 @@ def listing_public(ctx: Ctx, data: dict[str, Any], listing_id: int | str = "—"
     )
     if data.get("price_negotiable"):
         text += ctx.t("card.negotiable")
+    if data.get("fee_paid_at"):  # placement paid: Payme or confirmed by an admin
+        text += ctx.t("card.verified")
     if not promo and data.get("bonus_days"):
         text += ctx.t("card.bonus", days=data["bonus_days"])
     if installments:

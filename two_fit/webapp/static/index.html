@@ -160,6 +160,10 @@ p { margin: 0; }
 /* sold lately: still in the list for a few days, dimmed, with a dark «Sold» badge and no contacts */
 .item.sold { opacity: 0.6; }
 .badge.sold { background: var(--ink); color: var(--lime); font-weight: 700; }
+/* «✓ Проверено»: the placement is paid */
+.vbadge { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; padding: 2px 8px 2px 6px; border-radius: 999px;
+  background: var(--lime); color: var(--ink); font-size: 11.5px; font-weight: 700; letter-spacing: 0.01em; }
+.vbadge svg { width: 12px; height: 12px; }
 .hero .inst-note { margin-top: 10px; font-size: 14px; font-weight: 500; }
 .field .seg { margin-top: 8px; background: var(--page); }
 .field[hidden], .card[hidden] { display: none; }
@@ -543,7 +547,13 @@ function clubLogo(code) {
   const src = "clubs/" + code + (code === "1fit" ? ".svg" : ".png");
   return h("span", { class: "clogo" + (code === "1fit" ? " fit" : ""), "aria-hidden": "true" }, h("img", { src, alt: "", loading: "lazy" }));
 }
-const clubTag = (l) => isPromo(l) ? null : h("div", { class: "club-tag" }, clubLogo(clubOf(l)), clubName(clubOf(l)));
+function verifiedBadge() {
+  const b = h("span", { class: "vbadge" }, T("app.verified"));
+  b.insertAdjacentHTML("afterbegin", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>');
+  return b;
+}
+const clubTag = (l) => isPromo(l) && !l.verified ? null : h("div", { class: "club-tag" },
+  isPromo(l) ? null : clubLogo(clubOf(l)), isPromo(l) ? null : clubName(clubOf(l)), l.verified && !l.sold ? verifiedBadge() : null);
 // Months left instead of a tariff name: «12 months» made buyers think they got all 12.
 // «52 дн.» / «7 мес.» from today to an end date — the same rule as the server's remaining().
 function leftFor(endIso) {

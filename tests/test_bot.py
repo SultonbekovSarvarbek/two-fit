@@ -212,6 +212,12 @@ async def test_fee_paid_by_hand_through_the_operator(tmp_path):
         assert "Новое объявление №1" in h.texts_to(ADMIN)
         assert any("уже" in a.lower() or "оплач" in a.lower() for a in alerts(await h.click(ADMIN, "ad:fee!:1:0:")))
         assert "Оплат размещения: 1" in texts(await h.click(ADMIN, "ad:stats:0:0:"))
+        # paid and published: buyers see it as checked
+        await h.click(ADMIN, "ad:appr:1:0:")
+        await choose_lang(h, BUYER, "ru")
+        lst = await h.send(BUYER, "🏋️ Все абонементы")
+        assert "№1 · 1Fit · 2\xa0000\xa0000 сум · ✔️" in [b.text for c in lst for b in buttons_of(c)]
+        assert "✔️ <b>Проверено</b>" in texts(await h.click(BUYER, "card:1:0:"))
     finally:
         await h.stop()
 
