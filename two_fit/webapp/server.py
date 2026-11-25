@@ -11,6 +11,7 @@ import hashlib
 import html
 import hmac
 import logging
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -294,6 +295,8 @@ class WebApp:
                   "LEGAL_PHONE": c.legal_phone, "LEGAL_EMAIL": c.legal_email, "EFFECTIVE_DATE": c.legal_date,
                   "FEE": fmt_money(c.listing_fee), "OPERATOR": c.operator}
         for key, value in values.items():
+            if not value:  # a requisite not given: its own line goes, a mention inside a sentence is marked
+                body = re.sub(r"<p>[^<]*\{\{" + key + r"\}\}[^<]*</p>\n?", "", body)
             body = body.replace("{{" + key + "}}", html.escape(value) if value else missing)
         # the documents link to each other as «offer» / «terms»: keep the language
         body = body.replace('href="offer"', f'href="offer?lang={lang}"').replace('href="terms"', f'href="terms?lang={lang}"')

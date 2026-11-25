@@ -633,7 +633,7 @@ async def test_documents_and_logos_are_public(h, api):
     res = await api.client.get("/offer?lang=ru")
     text = await res.text()
     assert res.status == 200 and "Публичная оферта" in text and "@s_sarvar" in text and "{{" not in text
-    assert "[не указано]" in text  # requisites not set yet are marked, not left as placeholders
+    assert "ИНН:" not in text and "МФО:" not in text  # requisites not given: their lines are left out
     assert 'href="terms?lang=ru"' in text
     res = await api.client.get("/terms?lang=uz")
     assert res.status == 200 and "{{" not in await res.text()
