@@ -40,13 +40,13 @@ async def h(tmp_path):
 
 # ------------------------------------------------------------------ the formula
 @pytest.mark.parametrize("days, base, recommended, max_price", [
-    (600, 730, 8_010_000, 8_510_000),   # 24-month membership, most of it left
-    (300, 365, 5_180_000, 5_510_000),   # the buyer would otherwise buy 12 months
-    (170, 180, 4_450_000, 4_720_000),   # 5 months 20 days: compared with 6 months
+    (600, 730, 8_520_000, 9_050_000),   # 24-month membership, most of it left: between a year and two
+    (300, 365, 5_740_000, 6_100_000),   # between 6 months (5 890 000) and a year (7 890 000)
+    (170, 180, 4_450_000, 4_720_000),   # 5 months 20 days: 170 days at the 6-month price per day
     (135, 180, 3_530_000, 3_750_000),   # 4 months 15 days
-    (60, 90, 2_600_000, 2_770_000),     # under 3 months: compared with the 3-month tariff
+    (60, 180, 1_570_000, 1_660_000),    # under 3 months: still the 6-month price per day, not the dear 3 months
 ])
-def test_advice_follows_the_cheapest_1fit_tariff(days, base, recommended, max_price):
+def test_advice_follows_the_1fit_tariffs(days, base, recommended, max_price):
     a = advise(end_in(days), TODAY)
     assert (a.base_days, a.recommended, a.max_price) == (base, recommended, max_price)
     assert a.saving(a.recommended) == 20  # the advised price is about 20% cheaper than 1Fit per month
@@ -55,8 +55,16 @@ def test_advice_follows_the_cheapest_1fit_tariff(days, base, recommended, max_pr
 
 def test_month_cost_is_what_1fit_charges_per_month():
     a = advise(end_in(300), TODAY)
-    assert abs(a.fit_month - 657_500) < 1_000  # 7 890 000 / 12
-    assert advise(end_in(600), TODAY).fit_month < 510_000  # 24 months: the real 507 917, not 1Fit's 1 015 833
+    assert abs(a.fit_month - 729_000) < 1_000  # 300 days are worth 7 187 297 at 1Fit: ≈ 729 000 a month
+    assert advise(end_in(600), TODAY).fit_month < 550_000  # 24 months: per month of use, not 1Fit's 1 015 833
+
+
+def test_one_day_more_never_costs_less():
+    """Prorating «the cheapest tariff that covers the days» priced 91 days 1.5 million under 90 and 250 under 180."""
+    prices = [advise(end_in(d), TODAY).recommended for d in range(1, 800)]
+    assert prices == sorted(prices)
+    assert advise(end_in(91), TODAY).recommended - advise(end_in(90), TODAY).recommended < 50_000
+    assert advise(end_in(180), TODAY).fit_value == 5_890_000 and advise(end_in(365), TODAY).fit_value == 7_890_000
 
 
 def test_installments_the_buyer_takes_over_come_off_the_price():
@@ -68,7 +76,7 @@ def test_installments_the_buyer_takes_over_come_off_the_price():
 
 
 def test_installments_as_dear_as_1fit_leave_no_limit():
-    a = advise(end_in(200), TODAY, monthly_payment=500_000, payments_left=9)  # 4.5M left to pay vs ~4.3M value
+    a = advise(end_in(200), TODAY, monthly_payment=500_000, payments_left=11)  # 5.5M left to pay vs ~6.1M value
     assert a.max_price == 0 and not a.too_high(3_000_000)  # no cap that would leave nothing to ask
     assert a.recommended == 10_000
 

@@ -1,8 +1,12 @@
 """Price advice for a membership: what the seller should ask so it sells.
 
-A buyer does not compare a listing with «7 890 000», but with what 1Fit would charge him for the same time —
-and 1Fit sells in installments with no overpayment. So the advice starts from the cheapest 1Fit tariff that
-covers the days that are left, takes that share of its price and knocks a discount off.
+A buyer does not compare a listing with «7 890 000», but with what 1Fit would charge him for the same time.
+That value is drawn as a line through 1Fit's tariffs — 0 days cost nothing, 180 days cost the 6-month price,
+365 days the year, 730 days two years — and read at the days that are left; then a discount is knocked off.
+
+The line never goes down and never jumps, so one day more never costs less (prorating «the cheapest tariff
+that covers the days» priced 91 days 1.5 million below 90, and 250 days below 180). 1Fit's 3-month tariff is
+left out: per day it costs half as much again as 6 months, and a buyer of 50 days compares with those.
 
 When the membership is paid in installments the buyer keeps paying 1Fit every month after the deal, so those
 payments are part of what the membership costs him: they come off the price the seller may ask.
@@ -19,6 +23,7 @@ from .validators import PRICE_MIN
 # These are only the starting values: the price watcher keeps the current ones in the database.
 DEFAULT_FIT_PRICES: dict[int, int] = {90: 4_890_000, 180: 5_890_000, 365: 7_890_000, 730: 12_190_000}
 
+MIN_BASE_DAYS = 180  # shorter 1Fit tariffs (3 months) are not what a buyer compares with: far dearer per day
 DISCOUNT_PERCENT = 20  # how much cheaper than 1Fit we advise to sell
 MAX_PERCENT = 85       # a seller may not ask more than this share of the 1Fit value: it would not sell
 MIN_PERCENT = 40       # below this the seller is warned (a typo or a giveaway)
@@ -79,22 +84,37 @@ def normalize_prices(prices: dict | None) -> dict[int, int]:
     return clean or dict(DEFAULT_FIT_PRICES)
 
 
+def fit_value_of(days: int, prices: dict[int, int]) -> tuple[float, int]:
+    """What ``days`` of 1Fit are worth, and the 1Fit tariff they are compared with (the first that covers them).
+    Linear between the tariffs (0 → 0, 180 → 5 890 000, 365 → 7 890 000, 730 → 12 190 000); past the longest
+    tariff it goes on as the last stretch does."""
+    plans = [d for d in sorted(prices) if d >= MIN_BASE_DAYS] or sorted(prices)
+    points, top = [(0, 0)], 0
+    for d in plans:
+        top = max(top, prices[d])  # a longer tariff never counts as cheaper than a shorter one
+        points.append((d, top))
+    base = next((d for d in plans if d >= days), plans[-1])
+    for (d0, p0), (d1, p1) in zip(points, points[1:]):
+        if days <= d1:
+            return p0 + (p1 - p0) * (days - d0) / (d1 - d0), base
+    (d0, p0), (d1, p1) = points[-2], points[-1]
+    return p1 + (p1 - p0) * (days - d1) / (d1 - d0), base
+
+
 def advise(end_iso: str, today: date, fit_prices: dict[int, int] | None = None,
            monthly_payment: int | None = None, payments_left: int | None = None,
            discount: int = DISCOUNT_PERCENT, max_percent: int = MAX_PERCENT,
            plan_days: int | None = None) -> Advice | None:
     """Advice for a membership that ends on ``end_iso``; ``None`` if it has already ended.
-    The base is always the cheapest 1Fit tariff that covers the days left — what the buyer would buy instead.
-    ``plan_days`` (the tariff the seller bought) does not change it: 147 days left of a 12-month membership
-    compete with 1Fit's 6 months for 5 890 000, not with a year for 7 890 000. It is kept for the callers."""
+    The value of the days left comes from 1Fit's tariffs (``fit_value_of``). ``plan_days`` (the tariff the seller
+    bought) does not change it: 147 days left of a 12-month membership are worth 147 days, whatever was bought.
+    It is kept for the callers."""
     days_left = (date.fromisoformat(end_iso) - today).days
     if days_left <= 0:
         return None
     prices = normalize_prices(fit_prices)
-    plans = sorted(prices)
-    base_days = next((d for d in plans if d >= days_left), plans[-1])
+    fit_value, base_days = fit_value_of(days_left, prices)
     base_price = prices[base_days]
-    fit_value = days_left / base_days * base_price
     installments = (monthly_payment or 0) * (payments_left or 0) if monthly_payment and payments_left else 0
 
     recommended = max(PRICE_MIN, _round_down(fit_value * (100 - discount) / 100 - installments))
@@ -112,5 +132,5 @@ def advise(end_iso: str, today: date, fit_prices: dict[int, int] | None = None,
         recommended=recommended,
         max_price=max_price,
         min_price=max(PRICE_MIN, min_price),
-        fit_month=round(base_price / (base_days / DAYS_PER_MONTH)),
+        fit_month=round(fit_value / (days_left / DAYS_PER_MONTH)),  # what a month of these days costs at 1Fit
     )
