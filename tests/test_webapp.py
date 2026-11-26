@@ -640,3 +640,65 @@ async def test_documents_and_logos_are_public(h, api):
     assert res.status == 200 and res.content_type == "image/png"
     res = await api.client.get("/clubs/1fit.svg")
     assert res.status == 200 and res.content_type == "image/svg+xml"
+
+
+async def test_moved_bot_and_mini_app_only_point_to_the_new_bot(tmp_path):
+    """MOVED_URL: whatever the user does, the bot and the Mini App say «we moved» and link to the new bot."""
+    from dataclasses import replace
+    from tests.harness import Harness, texts
+
+    new = "https://t.me/repass_new_bot"
+    h = Harness(tmp_path / "bot.db")
+    h.cfg = replace(h.cfg, moved_url=new)
+    await h.start()
+    try:
+        got = await h.send(7, "/start")  # no language yet: both languages, no language question
+        assert "Мы переехали" in texts(got) and "Биз кўчдик" in texts(got) and "Выберите язык" not in texts(got)
+        assert h.url_buttons(7) == [new, new]
+        await h.repo.set_lang(7, "uz")
+        got = await h.click(7, "menu:catalog")
+        assert "Биз кўчдик" in texts(got) and "Мы переехали" not in texts(got)
+
+        app = create_webapp(h.repo, I18n(), h.cfg, h.bot, h.dp["notifier"])
+        async with TestClient(TestServer(app)) as client:
+            res = await client.get("/")  # opens without a Telegram login too
+            page = await res.text()
+            assert res.status == 200 and "Мы переехали" in page and f'href="{new}"' in page
+            status, body = await Api(client, h.cfg.bot_token).call("GET", "/api/bootstrap", 7)
+            assert status == 410 and body["error"] == "moved" and "<b>" not in body["message"]
+    finally:
+        await h.stop()
+
+
+async def test_free_listing_paid_later_gets_the_badge_and_rises(h, api):
+    """A listing placed for free is already in the catalog; the seller pays the operator, an admin presses
+    «Payment received»: it stays published, gets «✓ Checked» and goes above the free ones."""
+    from tests.harness import texts
+
+    cheap = await publish(h, api, price="1 500 000", accepted_price=1_500_000)
+    dear = await publish(h, api, price="3 500 000", accepted_price=3_500_000)
+    _, cat = await api.call("GET", "/api/catalog", BUYER)
+    assert [(i["id"], i["verified"]) for i in cat["items"]] == [(cheap, False), (dear, False)]
+
+    object.__setattr__(h.cfg, "listing_fee", 30_000)  # the fee was switched on after they were placed
+    await h.repo.touch_user(ADMIN, "admin", "Admin")
+    await h.repo.set_lang(ADMIN, "ru")
+    await h.repo.set_lang(SELLER, "ru")
+    await h.click(ADMIN, f"ad:open:{dear}:0:")
+    assert h.button(ADMIN, "Оплата 30\xa0000 сум получена") == f"ad:fee:{dear}:0:"
+    assert "поднимется выше бесплатных" in texts(await h.click(ADMIN, f"ad:fee:{dear}:0:"))
+    await h.click(ADMIN, f"ad:fee!:{dear}:0:")
+
+    listing = await h.repo.get_listing(dear)
+    assert listing["status"] == LS.APPROVED and listing["fee_paid_at"] and listing["fee_amount"] == 30_000
+    assert "получило отметку «Проверено»" in h.texts_to(SELLER)
+    _, cat = await api.call("GET", "/api/catalog", BUYER)
+    assert [(i["id"], i["verified"]) for i in cat["items"]] == [(dear, True), (cheap, False)]
+    # once paid, the button is gone
+    await h.click(ADMIN, f"ad:open:{dear}:0:")
+    assert not [b for b in buttons_of_last(h, ADMIN) if "получена" in b.text]
+
+
+def buttons_of_last(h, uid):
+    from tests.harness import buttons_of
+    return buttons_of(h.to(uid)[-1])

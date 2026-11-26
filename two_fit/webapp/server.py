@@ -78,6 +78,38 @@ h1 {{ font-size: 24px; line-height: 1.25; }} h2 {{ font-size: 18px; margin-top: 
 a {{ color: inherit; }} .langs {{ color: var(--muted); font-size: 14px; }}
 </style></head><body><main><p class="langs"><a href="?lang=ru">Русский</a> · <a href="?lang=uz">Ўзбекча</a></p>
 {body}</main></body></html>"""
+# Shown instead of the Mini App once the service moved (MOVED_URL). No login: it must open for everyone.
+MOVED_PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Repass</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {{ color-scheme: light dark; --fg: #15150F; --bg: #F2EEE3; --muted: #66655A; --btn: #15150F; --on-btn: #C6F432; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --fg: #F2EEE3; --bg: #15150F; --muted: #9C9A8B; --btn: #C6F432; --on-btn: #15150F; }} }}
+body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+  font: 16px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; text-align: center; }}
+main {{ max-width: 420px; padding: 32px 24px; }}
+h1 {{ margin: 0 0 6px; font-size: 26px; line-height: 1.2; }} h1 + h1 {{ margin-bottom: 20px; }}
+p {{ margin: 0 0 12px; color: var(--muted); }}
+a {{ display: block; margin-top: 28px; padding: 16px 20px; border-radius: 16px; background: var(--btn); color: var(--on-btn);
+  font-weight: 700; font-size: 17px; text-decoration: none; }}
+</style></head><body><main>
+<h1>Мы переехали!</h1><h1>Биз кўчдик!</h1>
+<p>2FIT теперь называется <b>Repass</b> и работает в новом боте.</p>
+<p>2FIT энди <b>Repass</b> деб номланади ва янги ботда ишлайди.</p>
+<a id="go" href="{url}">Перейти в Repass · Repass'га ўтиш →</a>
+</main><script>
+(function () {{
+  var tg = window.Telegram && window.Telegram.WebApp, go = document.getElementById("go");
+  if (!tg || !tg.initData) return;  // a plain browser: the link works by itself
+  try {{ tg.ready(); tg.expand(); }} catch (e) {{}}
+  go.addEventListener("click", function (e) {{
+    try {{
+      if (go.href.indexOf("https://t.me/") === 0) tg.openTelegramLink(go.href); else tg.openLink(go.href);
+      e.preventDefault();
+    }} catch (err) {{ /* older clients: follow the link */ }}
+  }});
+}})();
+</script></body></html>"""
 INIT_DATA_MAX_AGE = 24 * 3600  # seconds; Telegram re-signs initData on every launch
 SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024
 MY_LIMIT = 100
@@ -239,6 +271,8 @@ class WebApp:
     async def auth_mw(self, request: web.Request, handler):
         if not request.path.startswith("/api/"):
             return await handler(request)
+        if self.cfg.moved_url:  # a page left open from before the move
+            raise ApiError(410, "moved", re.sub(r"<[^>]+>", "", self.i18n.t(None, "moved.text")))
         scheme, _, init_data = request.headers.get("Authorization", "").partition(" ")
         denied = ApiError(401, "unauthorized", self.i18n.t(None, "app.err.auth"))
         if scheme.lower() != "tma" or not init_data:
@@ -304,6 +338,9 @@ class WebApp:
                             content_type="text/html", headers={"Cache-Control": "no-cache"})
 
     async def index(self, request: web.Request) -> web.StreamResponse:
+        if self.cfg.moved_url:
+            return web.Response(text=MOVED_PAGE.format(url=html.escape(self.cfg.moved_url, quote=True)),
+                                content_type="text/html", headers={"Cache-Control": "no-cache"})
         return web.FileResponse(STATIC_DIR / "index.html", headers={
             "Cache-Control": "no-cache",
             "X-Content-Type-Options": "nosniff",

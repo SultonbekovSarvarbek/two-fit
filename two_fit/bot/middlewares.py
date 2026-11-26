@@ -5,7 +5,9 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
 from aiogram.filters import Filter
-from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, TelegramObject
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, PreCheckoutQuery, TelegramObject,
+)
 
 from ..config import Config
 from ..i18n import I18n
@@ -33,6 +35,21 @@ class ContextMiddleware(BaseMiddleware):
 
         user = await self.repo.touch_user(tg_user.id, tg_user.username, tg_user.full_name)
         data["ctx"] = Ctx(self.repo, self.i18n, self.cfg, user)
+
+        # We moved: whatever the user does, they get the note and the button to the new bot.
+        # A payment already under way is still let through.
+        paying = isinstance(event, PreCheckoutQuery) or (isinstance(event, Message) and event.successful_payment)
+        if self.cfg.moved_url and not paying:
+            if isinstance(event, CallbackQuery):
+                await event.answer()
+            langs = [user["lang"]] if user["lang"] else ["ru", "uz"]
+            await data["bot"].send_message(
+                tg_user.id, "\n\n".join(self.i18n.t(lang, "moved.text") for lang in langs),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=self.i18n.t(lang, "moved.btn"), url=self.cfg.moved_url)] for lang in langs
+                ]),
+            )
+            return None
 
         if user["lang"] is None and not isinstance(event, PreCheckoutQuery):  # a payment check never waits
             is_lang_choice = isinstance(event, CallbackQuery) and (event.data or "").startswith("lang:")

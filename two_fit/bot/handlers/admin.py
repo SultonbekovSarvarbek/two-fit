@@ -132,6 +132,11 @@ def screen_check(ctx: Ctx, listing: dict) -> list[str]:
     return lines
 
 
+def _fee_of(ctx: Ctx, listing: dict) -> int:
+    """What the seller pays for this listing: the fee set when it was created, today's fee for a free one."""
+    return listing["fee_amount"] or ctx.cfg.listing_fee
+
+
 async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, InlineKeyboardMarkup]:
     seller = await ctx.repo.get_user(listing["seller_id"])
     text = ctx.t(
@@ -166,8 +171,8 @@ async def render_card(ctx: Ctx, listing: dict, back: str = "") -> tuple[str, Inl
 
     lid, st = listing["id"], listing["status"]
     rows = []
-    if st == LS.UNPAID and Repo.fee_due(listing):  # paid by hand through the operator
-        rows.append([btn(ctx.t("admin.fee_received", fee=fmt_money(listing["fee_amount"])), A("fee", id=lid))])
+    if Repo.can_mark_paid(listing) and _fee_of(ctx, listing):  # paid by hand through the operator
+        rows.append([btn(ctx.t("admin.fee_received", fee=fmt_money(_fee_of(ctx, listing))), A("fee", id=lid))])
     if st == LS.PENDING:
         rows.append([btn(ctx.t("admin.approve"), A("appr", id=lid))])
         if listing["description"]:
@@ -293,16 +298,22 @@ async def _listing_action(call: CallbackQuery, ctx: Ctx, state: FSMContext, noti
         await call.message.answer(ctx.t("admin.ask_reason", id=lid),
                                   reply_markup=kb([btn(ctx.t("admin.back"), A("open", id=lid))]))
     elif a == "fee":
-        if listing["status"] != LS.UNPAID or not Repo.fee_due(listing):
+        if not Repo.can_mark_paid(listing) or not _fee_of(ctx, listing):
             raise RepoError("already")
         await call.answer()
-        await _show(call, ctx.t("admin.confirm_fee", id=lid, fee=fmt_money(listing["fee_amount"])),
+        key = "admin.confirm_fee" if listing["status"] == LS.UNPAID else "admin.confirm_fee_live"
+        await _show(call, ctx.t(key, id=lid, fee=fmt_money(_fee_of(ctx, listing))),
                     confirm_kb(ctx, A("fee!", id=lid), A("open", id=lid)))
     elif a == "fee!":
-        listing, amount = await repo.pay_fee_manually(lid, ctx.user_id)
+        was_unpaid = listing["status"] == LS.UNPAID
+        listing, amount = await repo.pay_fee_manually(lid, ctx.user_id, ctx.cfg.listing_fee)
         await call.answer(ctx.t("admin.fee_ok", id=lid))
         await _show(call, *await render_card(ctx, listing))
-        await announce_paid(notifier, ctx, listing, True, amount)  # the seller hears; admins get it to moderate
+        if was_unpaid:
+            await announce_paid(notifier, ctx, listing, True, amount)  # the seller hears; admins get it to moderate
+        else:  # it stays where it was, now with the badge and above the free ones
+            await notifier.user(ctx, listing["seller_id"],
+                                lambda u: (u.t("pay.done_live", id=lid, fee=fmt_money(amount)), None))
     elif a == "rm":
         if listing["status"] not in LS.ADMIN_REMOVABLE:
             raise RepoError("bad_status")

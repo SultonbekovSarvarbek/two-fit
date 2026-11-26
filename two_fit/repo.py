@@ -647,16 +647,29 @@ class Repo:
                 return await self.get_listing(listing_id), False
             return await self._record_fee(listing_id, user_id, amount, currency, charge_id, provider_charge_id)
 
-    async def pay_fee_manually(self, listing_id: int, admin_id: int) -> tuple[dict[str, Any], int]:
-        """An admin confirms the seller paid the operator by hand: the listing goes to moderation.
-        Returns (listing, amount)."""
+    @staticmethod
+    def can_mark_paid(listing: dict[str, Any]) -> bool:
+        """An admin may confirm a payment made by hand: for a listing that waits for its fee, and for one
+        placed for free that is in moderation or in the catalog (the seller paid later, for the badge)."""
+        if listing.get("fee_paid_at"):
+            return False
+        if listing["status"] == LS.UNPAID:
+            return bool(listing.get("fee_amount"))
+        return listing["status"] in (LS.PENDING, LS.APPROVED)
+
+    async def pay_fee_manually(self, listing_id: int, admin_id: int, fee: int = 0) -> tuple[dict[str, Any], int]:
+        """An admin confirms the seller paid the operator by hand. An unpaid listing goes to moderation;
+        one already in moderation or in the catalog stays there, now paid: the badge, and above the free ones.
+        ``fee``: today's fee, for a listing that was placed for free. Returns (listing, amount)."""
         async with self.tx():
             listing = await self.get_listing(listing_id)
             if not listing:
                 raise RepoError("not_found")
-            if listing["status"] != LS.UNPAID or not self.fee_due(listing):
+            if not self.can_mark_paid(listing):
                 raise RepoError("already")
-            amount = listing["fee_amount"]
+            amount = listing["fee_amount"] or fee
+            if not listing["fee_amount"]:
+                await self.db.execute("UPDATE listings SET fee_amount=? WHERE id=?", (amount, listing_id))
             listing, _ = await self._record_fee(listing_id, listing["seller_id"], amount, "UZS",
                                                 f"manual:{listing_id}:{admin_id}:{now_iso()}", None)
             await self._log(listing_id, admin_id, "fee_manual", amount=amount)
@@ -789,9 +802,10 @@ class Repo:
             params["club"] = club
         total = await self._scalar(f"SELECT COUNT(*) FROM listings WHERE {where}", params)
         rows = await self._all(
-            # cheapest first, by the price buyers see: installments cost monthly × payments left
-            # the sold ones after everything on sale
-            f"SELECT * FROM listings WHERE {where} ORDER BY status=:sold, {SHOWN_PRICE} ASC, published_at DESC, id DESC"
+            # paid placements («✓ Checked») above the free ones; then the cheapest first, by the price buyers see:
+            # installments cost monthly × payments left. The sold ones after everything on sale.
+            f"SELECT * FROM listings WHERE {where} ORDER BY status=:sold, fee_paid_at IS NULL,"
+            f" {SHOWN_PRICE} ASC, published_at DESC, id DESC"
             " LIMIT :lim OFFSET :off",
             {**params, "lim": limit, "off": offset},
         )

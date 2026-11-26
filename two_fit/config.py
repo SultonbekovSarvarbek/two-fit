@@ -57,6 +57,8 @@ class Config:
     legal_phone: str = ""
     legal_email: str = ""
     legal_date: str = ""  # when the current version took effect, e.g. 01.12.2026
+    # The service moved (the rebranding to Repass): the bot and the Mini App only say so and link there.
+    moved_url: str = ""  # https://t.me/<the new bot>; empty: this bot works as usual
 
     @property
     def payme_enabled(self) -> bool:
@@ -133,6 +135,7 @@ def load_config() -> Config:
         payme_package_code=os.getenv("PAYME_PACKAGE_CODE", "").strip(),
         payme_vat_percent=int(os.getenv("PAYME_VAT_PERCENT", "0") or 0),
         fee_manual=os.getenv("FEE_MANUAL", "").strip().lower() in ("1", "true", "yes", "on"),
+        moved_url=os.getenv("MOVED_URL", "").strip(),
         **{f"legal_{k}": os.getenv(f"LEGAL_{k.upper()}", "").strip()
            for k in ("name", "inn", "address", "bank", "account", "mfo", "phone", "email", "date")},
     )
