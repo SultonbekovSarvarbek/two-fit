@@ -63,7 +63,6 @@ class SellForm(StatesGroup):
     kind = State()
     club = State()
     city = State()
-    plan = State()
     tariff = State()
     date = State()
     start = State()
@@ -83,20 +82,20 @@ class SellForm(StatesGroup):
     choose = State()
 
 
-STEPS = ["kind", "club", "city", "plan", "tariff", "date", "start", "payment", "monthly", "left", "freeze", "freeze_days", "bonus", "code", "price", "desc", "photo",
+STEPS = ["kind", "club", "city", "tariff", "date", "start", "payment", "monthly", "left", "freeze", "freeze_days", "bonus", "code", "price", "desc", "photo",
          "name", "phone"]
 INSTALLMENT_STEPS = ("monthly", "left")  # asked only when the membership is paid in installments
-MEMBERSHIP_ONLY = ("club", "plan", "start", "payment", "monthly", "left", "freeze", "freeze_days", "bonus")
-FIT_ONLY = ("plan", "payment", "monthly", "left", "bonus")  # 1Fit's tariffs, installments and bonus days
+MEMBERSHIP_ONLY = ("club", "start", "payment", "monthly", "left", "freeze", "freeze_days", "bonus")
+FIT_ONLY = ("payment", "monthly", "left", "bonus")  # 1Fit's installments and bonus days
 PROMO_ONLY = ("tariff", "code")  # a membership has no tariff: «12 months» misled buyers
 STATE_OF = {s: getattr(SellForm, s) for s in STEPS}
 # Steps shown as «Step n/total»; the installment answers and the phone belong to the step before them.
 NUMBERED = {
-    LK.MEMBERSHIP: ["club", "city", "plan", "date", "payment", "freeze", "price", "desc", "photo", "name"],
+    LK.MEMBERSHIP: ["club", "city", "date", "payment", "freeze", "price", "desc", "photo", "name"],
     LK.PROMO: ["city", "tariff", "date", "code", "price", "desc", "photo", "name"],
 }
 FIELDS = {  # field in «Change» menu -> first step to ask
-    "club": "club", "city": "city", "plan": "plan", "tariff": "tariff", "date": "date", "start": "start", "payment": "payment", "freeze": "freeze", "bonus": "bonus", "code": "code",
+    "club": "club", "city": "city", "tariff": "tariff", "date": "date", "start": "start", "payment": "payment", "freeze": "freeze", "bonus": "bonus", "code": "code",
     "price": "price", "desc": "desc", "photo": "photo", "contacts": "name",
 }
 # A promo code is described in its own words: what it gives, until when to activate it, what it costs.
@@ -183,9 +182,6 @@ async def ask(message: Message, state: FSMContext, ctx: Ctx, step: str) -> None:
         names = [btn(ctx.i18n.city(ctx.lang, c), SellCb(action="city", value=c)) for c in CITIES]
         rows = [names[i:i + 2] for i in range(0, len(names), 2)]
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, rows))
-    elif step == "plan":
-        options = [[btn(ctx.t(f"app.plan.{days}"), SellCb(action="plan", value=str(days)))] for days in TARIFF_PLANS]
-        await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step, options))
     elif step in ("tariff", "date", "code"):
         await message.answer(prompt(ctx, data, step), reply_markup=_nav(ctx, step))
     elif step == "start":
@@ -356,7 +352,7 @@ async def apply_auto_price(state: FSMContext, ctx: Ctx) -> None:
     if not data.get("auto_price") or _kind(data) != LK.MEMBERSHIP or _installment(data):
         return
     draft = data.get("draft") or {}
-    a = price_advice(ctx, draft) if draft.get("tariff_days") else None
+    a = price_advice(ctx, draft)
     if a and draft.get("price") != a.recommended:
         await draft_update(state, price=a.recommended)
 
@@ -366,7 +362,7 @@ async def show_preview(message: Message, state: FSMContext, ctx: Ctx) -> None:
     d = data.get("draft") or {}
     if _kind(data) == LK.MEMBERSHIP and is_fit(d):
         # Listed before these were asked, or the club was just changed to 1Fit: ask them first.
-        missing = "plan" if d.get("tariff_days") not in TARIFF_PLANS else "payment" if d.get("paid_in_full") is None else None
+        missing = "payment" if d.get("paid_in_full") is None else None
         if missing:
             await state.update_data(single=True)
             await ask(message, state, ctx, missing)
@@ -412,8 +408,7 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
         "club",
     )}
     draft["paid_in_full"] = None if listing["paid_in_full"] is None else bool(listing["paid_in_full"])
-    if draft["tariff_days"] not in TARIFF_PLANS:  # a 6-month one listed before: the seller picks 12 or 24 months
-        draft["tariff_days"] = None
+    draft["tariff_days"] = None  # the 1Fit tariff is not asked any more: it cannot be changed, so it does not hold the dates
     draft["has_freeze"] = bool(listing["freeze_days"])
     draft["bonus_days"] = listing["bonus_days"] or 0
     draft["end_date"] = card_end(listing)  # the form asks the date shown on the 1Fit card
@@ -431,7 +426,7 @@ async def start_edit(message: Message, state: FSMContext, ctx: Ctx, listing: dic
 
 
 # ------------------------------------------------------------------ navigation
-_WIZARD = (SellForm.kind, SellForm.club, SellForm.code, SellForm.city, SellForm.plan, SellForm.freeze, SellForm.freeze_days, SellForm.tariff, SellForm.date, SellForm.start, SellForm.payment, SellForm.monthly,
+_WIZARD = (SellForm.kind, SellForm.club, SellForm.code, SellForm.city, SellForm.freeze, SellForm.freeze_days, SellForm.tariff, SellForm.date, SellForm.start, SellForm.payment, SellForm.monthly,
            SellForm.left, SellForm.price, SellForm.desc, SellForm.photo, SellForm.name, SellForm.phone,
            SellForm.preview, SellForm.choose)
 
@@ -704,27 +699,6 @@ async def _set_price(message: Message, state: FSMContext, ctx: Ctx, price: int) 
     await advance(message, state, ctx, "price")
 
 
-@router.callback_query(SellForm.plan, SellCb.filter(F.action == "plan"))
-async def on_plan(call: CallbackQuery, callback_data: SellCb, state: FSMContext, ctx: Ctx) -> None:
-    if not callback_data.value.isdigit() or int(callback_data.value) not in TARIFF_PLANS:
-        await call.answer(ctx.t("common.stale"), show_alert=True)
-        return
-    days = int(callback_data.value)
-    draft = (await state.get_data()).get("draft", {})
-    end, start = draft.get("end_date"), draft.get("start_date")
-    if end:
-        try:
-            check_plan_end(date.fromisoformat(end), today_local(), days)
-            check_plan_span(date.fromisoformat(start) if start else None, date.fromisoformat(end), days)
-        except ValidationError as e:
-            await call.answer(ctx.t(f"err.{e.code}"), show_alert=True)
-            return
-    await call.answer()
-    await call.message.edit_text(prompt(ctx, await state.get_data(), "plan") + "\n\n<b>" + esc(ctx.t(f"app.plan.{days}")) + "</b>")
-    await draft_update(state, tariff_days=days)
-    await advance(call.message, state, ctx, "plan")
-
-
 @router.message(SellForm.desc)
 async def on_desc(message: Message, state: FSMContext, ctx: Ctx) -> None:
     await _text_step(message, state, ctx, "desc", parse_description, "description")
@@ -777,7 +751,7 @@ async def on_shots_done(call: CallbackQuery, state: FSMContext, ctx: Ctx) -> Non
     await finish_screens(call.message, state, ctx)
 
 
-SCREEN_FIELDS = ("end_date", "tariff_days", "freeze_days", "bonus_days")
+SCREEN_FIELDS = ("end_date", "freeze_days", "bonus_days")
 
 
 async def finish_screens(message: Message, state: FSMContext, ctx: Ctx) -> None:
@@ -820,20 +794,15 @@ async def on_screen_fix(call: CallbackQuery, callback_data: SellCb, state: FSMCo
     await call.message.edit_reply_markup(reply_markup=None)
     if callback_data.action == "screentake" and fix:
         draft = data.get("draft") or {}
-        plan = fix.get("tariff_days", draft.get("tariff_days"))
-        end = fix.get("end_date", draft.get("end_date"))
+        end = fix.get("end_date")
         update = {}
-        try:  # take the screenshot's values only if they make sense together
-            if plan in TARIFF_PLANS and end:
-                check_plan_end(date.fromisoformat(end), today_local(), plan)
+        try:  # take the screenshot's end date only if it is a valid one
+            if end:
                 parse_end_date(date.fromisoformat(end).strftime("%d.%m.%Y"), today_local())
-                update.update(tariff_days=plan, end_date=end)
+                update["end_date"] = end
                 start = draft.get("start_date")
-                if start:
-                    try:
-                        check_plan_span(date.fromisoformat(start), date.fromisoformat(end), plan)
-                    except ValidationError:
-                        update["start_date"] = None
+                if start and start >= end:
+                    update["start_date"] = None
         except ValidationError:
             update = {}
         if "freeze_days" in fix:
@@ -972,12 +941,6 @@ async def on_send(call: CallbackQuery, state: FSMContext, ctx: Ctx, notifier: No
         await call.message.edit_reply_markup(reply_markup=None)
         await ask(call.message, state, ctx, "kind")
         return
-    if draft["kind"] == LK.MEMBERSHIP and is_fit(draft) and not draft.get("tariff_days"):
-        await call.answer()
-        await call.message.edit_reply_markup(reply_markup=None)
-        await state.update_data(single=True)
-        await ask(call.message, state, ctx, "plan")
-        return
     if draft["kind"] == LK.MEMBERSHIP and is_fit(draft) and (draft.get("paid_in_full") is None or (draft["paid_in_full"] is False
                                              and not (draft.get("monthly_payment") and draft.get("payments_left")))):
         # Fully paid or installment is not answered yet (an old listing or an abandoned step).
@@ -1035,7 +998,6 @@ async def ask_instagram(message: Message, ctx: Ctx, data: dict) -> None:
 # Text typed while a button is expected (kind / city / payment / preview / field menu).
 @router.message(SellForm.kind)
 @router.message(SellForm.city)
-@router.message(SellForm.plan)
 @router.message(SellForm.freeze)
 @router.message(SellForm.payment)
 @router.message(SellForm.preview)

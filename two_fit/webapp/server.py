@@ -49,8 +49,6 @@ from ..validators import (
     TARIFF_MAX,
     TARIFF_PLANS,
     ValidationError,
-    check_plan_end,
-    check_plan_span,
     normalize_phone,
     parse_description,
     parse_end_date,
@@ -542,24 +540,12 @@ class WebApp:
         draft["bonus_days"] = 0
 
     def _membership_fields(self, ctx: Ctx, body: dict[str, Any], draft: dict[str, Any], number) -> None:
-        """The 1Fit tariff, the start date and how the membership is paid: fully or in installments."""
-        plan = body.get("tariff_days")
-        if plan not in TARIFF_PLANS or isinstance(plan, bool):
-            raise ApiError(400, "bad_plan", ctx.t("app.err.plan"), "tariff_days")
-        draft["tariff_days"] = plan
+        """The start date and how the membership is paid: fully or in installments (the 1Fit tariff is not asked)."""
+        draft["tariff_days"] = None
         draft["freeze_days"] = self._freeze(ctx, body)
         draft["bonus_days"] = self._bonus(ctx, body)
-        try:
-            check_plan_end(date.fromisoformat(draft["end_date"]), today_local(), plan)
-        except ValidationError as e:
-            raise ApiError(400, e.code, ctx.t(f"err.{e.code}"), "end_date") from None
         draft["start_date"] = self._field(ctx, "start_date", self._iso_start, body.get("start_date") or "",
                                           today_local(), draft["end_date"])
-        try:  # 15 months between the dates on a 12-month tariff: a wrong date or a wrong tariff
-            check_plan_span(date.fromisoformat(draft["start_date"]) if draft["start_date"] else None,
-                            date.fromisoformat(draft["end_date"]), plan)
-        except ValidationError as e:
-            raise ApiError(400, e.code, ctx.t(f"err.{e.code}"), "start_date") from None
         paid = body.get("paid_in_full")
         if not isinstance(paid, bool):
             raise ApiError(400, "bad_payment", ctx.t("app.err.payment"), "payment")

@@ -16,7 +16,6 @@ import aiosqlite
 from .clubs import CLUBS, FIT, is_fit
 from .pricing import advise, normalize_prices
 from .usage import DAYS_PER_MONTH, with_bonus
-from .validators import TARIFF_PLANS
 
 # Uzbekistan has no DST: UTC+5 all year round.
 TZ = timezone(timedelta(hours=5))
@@ -441,8 +440,6 @@ class Repo:
             raise RepoError("incomplete")
         if not is_fit(draft):
             return  # other clubs: no 1Fit tariff and no 1Fit installments
-        if draft.get("tariff_days") not in TARIFF_PLANS:  # 6, 12 or 24 months: picked, not typed
-            raise RepoError("incomplete")
         # Fully paid or installment must be stated: «9 months, 500 000» meant 500 000 every month.
         paid = draft.get("paid_in_full")
         if paid not in (True, False, 0, 1):
@@ -475,7 +472,7 @@ class Repo:
             return LK.PROMO, draft["promo_code"], None, None, None, None, None, None
         if not is_fit(draft):  # another club: paid for, no 1Fit tariff
             return LK.MEMBERSHIP, None, None, draft.get("freeze_days"), draft.get("start_date"), 1, None, None
-        return (LK.MEMBERSHIP, None, draft["tariff_days"], draft.get("freeze_days"), draft.get("start_date"),
+        return (LK.MEMBERSHIP, None, draft.get("tariff_days"), draft.get("freeze_days"), draft.get("start_date"),
                 *Repo._payment(draft))
 
     @staticmethod
@@ -1019,7 +1016,7 @@ class Repo:
                                 "UPDATE listings SET paid_in_full=1, monthly_payment=NULL, payments_left=NULL, "
                                 "payments_as_of=NULL WHERE id=?", (listing["id"],))
                         listing = await self.get_listing(listing["id"])
-                if not (listing["price_auto"] and listing["tariff_days"]):
+                if not listing["price_auto"]:
                     continue
                 installment = listing["paid_in_full"] == 0
                 a = advise(listing["end_date"], today, self.fit_prices,

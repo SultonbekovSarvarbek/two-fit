@@ -201,8 +201,8 @@ async def test_catalog_shows_only_public_fields(h, api):
         assert set(item) == {"id", "city", "tariff", "end_date", "start_date", "usage", "price", "price_negotiable",
                              "description", "price_total", "kind", "left",
                              "month_cost", "tariff_days", "freeze_days", "bonus_days", "card_end_date", "sold", "club", "verified"}
-        # No start date, but the 12-month tariff gives it: «used 5 of 12 months» still shows.
-        assert item["start_date"] is None and item["tariff_days"] == 365 and item["usage"]["total"] == 12
+        # The 1Fit tariff is not asked any more: whatever an old app sends is not stored.
+        assert item["start_date"] is None and item["tariff_days"] is None
     _, only = await api.call("GET", "/api/catalog?city=samarkand", BUYER)
     assert [i["city"] for i in only["items"]] == ["samarkand"]
 
@@ -486,7 +486,7 @@ async def test_promo_codes_hidden_by_default(tmp_path):
         await h.send(SELLER, "/start")
         await h.click(SELLER, "lang:ru")
         first = texts(await h.send(SELLER, "➕ Продать абонемент"))
-        assert "Шаг 1/10" in first and "Абонемент какого клуба" in first and "Что вы продаёте" not in first and "промокод" not in first
+        assert "Шаг 1/9" in first and "Абонемент какого клуба" in first and "Что вы продаёте" not in first and "промокод" not in first
         assert "промокод" not in texts(await h.send(SELLER, "ℹ️ Как это работает"))
     finally:
         await h.stop()
@@ -546,7 +546,6 @@ async def test_bot_requires_the_screenshot(tmp_path):
         await h.click(SELLER, "sl:kind:membership")
         await h.click(SELLER, "sl:club:1fit")
         await h.click(SELLER, "sl:city:tashkent")
-        await h.click(SELLER, "sl:plan:365")
         await h.send(SELLER, (tl() + td(days=200)).strftime("%d.%m.%Y"))
         await h.click(SELLER, "sl:pay:full")
         await h.click(SELLER, "sl:freeze:no")

@@ -98,7 +98,6 @@ async def walk_to_price(h, days=200):
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
-    await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, (today_local() + timedelta(days=days)).strftime("%d.%m.%Y"))
     await h.click(SELLER, "sl:pay:full")
     await h.click(SELLER, "sl:freeze:no")
@@ -297,17 +296,9 @@ def test_end_date_must_fit_the_tariff():
         check_plan_end(TODAY + timedelta(days=300), TODAY, 180)  # 10 months left on a 6-month tariff
 
 
-async def test_api_needs_a_tariff_and_takes_a_low_price(h, api):  # noqa: F811
-    status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=None))
-    assert (status, err["field"]) == (400, "tariff_days")
-    # 6 months cannot be re-registered in 1Fit: only 12 or 24
-    status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=180))
-    assert (status, err["field"]) == (400, "tariff_days")
-    _, boot = await api.call("GET", "/api/bootstrap", SELLER)
-    assert boot["limits"]["plans"] == [365, 730]
-    status, err = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=365, end_date=(
-        today_local() + timedelta(days=500)).isoformat()))
-    assert (status, err["error"], err["field"]) == (400, "bad_end_for_plan", "end_date")
+async def test_api_needs_no_tariff_and_takes_a_low_price(h, api):  # noqa: F811
+    status, _ = await api.call("POST", "/api/listings", SELLER, draft(tariff_days=None))
+    assert status == 201  # the 1Fit tariff is not asked
 
     # a very low price is not questioned either
     status, made = await api.call("POST", "/api/listings", SELLER, draft(price="485 000"))
@@ -373,12 +364,11 @@ async def test_auto_price_in_the_bot(tmp_path):
         await h.click(SELLER, "sl:kind:membership")
         await h.click(SELLER, "sl:club:1fit")
         await h.click(SELLER, "sl:city:tashkent")
-        await h.click(SELLER, "sl:plan:365")
         await h.send(SELLER, end.strftime("%d.%m.%Y"))
         await h.click(SELLER, "sl:pay:full")
         await h.click(SELLER, "sl:freeze:no")
         nxt = texts(await h.click(SELLER, "sl:bonus:0"))
-        assert "Шаг 7/9" in nxt and "описание" in nxt  # no price question: straight to the description
+        assert "Шаг 6/8" in nxt and "описание" in nxt  # no price question: straight to the description
         await h.click(SELLER, "sl:skip:")
         await h.click(SELLER, "sl:skip:")
         await h.send(SELLER, "Алишер")
@@ -426,11 +416,8 @@ def test_start_and_end_must_fit_the_tariff():
     check_plan_span(None, date(2027, 12, 31), 365)  # no start date: nothing to compare
 
 
-async def test_api_refuses_dates_that_do_not_fit_the_tariff(h, api):  # noqa: F811
+async def test_api_takes_dates_without_a_tariff(h, api):  # noqa: F811
     end = (today_local() + timedelta(days=200)).isoformat()
-    wrong = (today_local() - timedelta(days=260)).isoformat()  # 460 days between the dates, 12-month tariff
-    status, err = await api.call("POST", "/api/listings", SELLER, draft(end_date=end, start_date=wrong))
-    assert (status, err["error"], err["field"]) == (400, "bad_dates_for_plan", "start_date")
     right = (today_local() - timedelta(days=165)).isoformat()
     status, _ = await api.call("POST", "/api/listings", SELLER, draft(end_date=end, start_date=right))
     assert status == 201
@@ -444,7 +431,6 @@ async def test_bot_does_not_ask_the_start_date(h):
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
-    await h.click(SELLER, "sl:plan:365")
     nxt = texts(await h.send(SELLER, (today_local() + timedelta(days=200)).strftime("%d.%m.%Y")))
     assert "Как оплачен абонемент" in nxt and "Дата начала" not in nxt
 
@@ -463,7 +449,6 @@ async def test_bot_offers_the_number_of_payments(h):
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
-    await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, (today_local() + timedelta(days=200)).strftime("%d.%m.%Y"))
     await h.click(SELLER, "sl:pay:installment")
     ask = texts(await h.send(SELLER, "500 000"))
@@ -692,7 +677,6 @@ async def test_bonus_days_in_the_bot(h):
     await h.click(SELLER, "sl:kind:membership")
     await h.click(SELLER, "sl:club:1fit")
     await h.click(SELLER, "sl:city:tashkent")
-    await h.click(SELLER, "sl:plan:365")
     await h.send(SELLER, card.strftime("%d.%m.%Y"))
     await h.click(SELLER, "sl:pay:full")
     assert "Бонусные дни" in texts(await h.click(SELLER, "sl:freeze:no"))
