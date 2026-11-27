@@ -853,6 +853,21 @@ class Repo:
             out.setdefault(r["seller_id"], []).append(r["id"])
         return out
 
+    async def unpaid_listings_by_seller(self, fee: int = 0, today: date | None = None) -> dict[int, list[tuple[int, int]]]:
+        """Seller id -> (listing id, fee) of their listings whose placement is not paid: those waiting for the fee,
+        and those placed for free that are in moderation or in the catalog. ``fee``: today's fee, for the free ones;
+        a listing with nothing to pay is left out."""
+        rows = await self._all(
+            "SELECT id, seller_id, fee_amount FROM listings WHERE fee_paid_at IS NULL AND end_date>=? "
+            "AND ((status=? AND fee_amount>0) OR status IN (?,?)) ORDER BY seller_id, id",
+            ((today or today_local()).isoformat(), LS.UNPAID, LS.PENDING, LS.APPROVED),
+        )
+        out: dict[int, list[tuple[int, int]]] = {}
+        for r in rows:
+            if r["fee_amount"] or fee:
+                out.setdefault(r["seller_id"], []).append((r["id"], r["fee_amount"] or fee))
+        return out
+
     async def count_status(self, status: str) -> int:
         return await self._scalar("SELECT COUNT(*) FROM listings WHERE status=?", (status,))
 

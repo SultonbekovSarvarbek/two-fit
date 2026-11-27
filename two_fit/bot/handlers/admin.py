@@ -244,6 +244,11 @@ async def on_admin(call: CallbackQuery, callback_data: AdmCb, state: FSMContext,
             await call.message.edit_reply_markup(reply_markup=None)
             sent, failed = await send_askprice(ctx, notifier)
             await call.message.answer(ctx.t("admin.askprice.done", sent=sent, failed=failed))
+        elif a == "askpay!":
+            await call.answer(ctx.t("admin.askprice.sending"))
+            await call.message.edit_reply_markup(reply_markup=None)
+            sent, failed = await send_askpay(ctx, notifier)
+            await call.message.answer(ctx.t("admin.askprice.done", sent=sent, failed=failed))
         elif a == "stats":
             await call.answer()
             await _show(call, *await render_stats(ctx))
@@ -387,6 +392,47 @@ async def send_askprice(ctx: Ctx, notifier: Notifier) -> tuple[int, int]:
             u.t("notify.update_price"),
             kb(*[[btn(u.t("notify.update_price_btn", id=i), MyCb(action="open", id=i))] for i in ids]),
         ))
+        sent, failed = sent + ok, failed + (not ok)
+        await asyncio.sleep(ASK_PRICE_PAUSE)
+    return sent, failed
+
+
+# ------------------------------------------------------------------ «pay for your listing» to those who have not
+ASK_PAY_LANGS = ("ru", "uz")  # one message in both languages, whatever language the seller chose
+
+
+def askpay_message(ctx: Ctx, listings: list[tuple[int, int]]) -> tuple[str, InlineKeyboardMarkup]:
+    """Russian, then Uzbek: the seller's unpaid listings with their fees, and a button to the operator in each."""
+    blocks, rows = [], []
+    for lang in ASK_PAY_LANGS:
+        u = ctx.for_lang(lang)
+        items = "\n".join(u.t("notify.pay_listing_item", id=i, fee=fmt_money(fee)) for i, fee in listings)
+        blocks.append(u.t("notify.pay_listing", listings=items))
+        rows.append([btn(u.t("pay.manual_btn"), url=ctx.cfg.support_url)])
+    return "\n\n— — —\n\n".join(blocks), kb(*rows)
+
+
+@router.message(Command("askpay"))
+async def cmd_askpay(message: Message, ctx: Ctx) -> None:
+    """Shows how many sellers get the message and what it looks like; nothing is sent before «Send»."""
+    sellers = await ctx.repo.unpaid_listings_by_seller(ctx.cfg.listing_fee)
+    if not sellers:
+        await message.answer(ctx.t("admin.askpay.none"))
+        return
+    n_listings = sum(len(items) for items in sellers.values())
+    sample, _ = askpay_message(ctx, next(iter(sellers.values())))
+    await message.answer(
+        ctx.t("admin.askpay.confirm", sellers=len(sellers), listings=n_listings) + "\n\n" + sample,
+        reply_markup=confirm_kb(ctx, A("askpay!"), A("home")))
+
+
+async def send_askpay(ctx: Ctx, notifier: Notifier) -> tuple[int, int]:
+    """Each seller once, in both languages, with their own unpaid listings. Returns (sent, failed)."""
+    import asyncio
+
+    sent = failed = 0
+    for seller_id, listings in (await ctx.repo.unpaid_listings_by_seller(ctx.cfg.listing_fee)).items():
+        ok = await notifier.send(seller_id, *askpay_message(ctx, listings))
         sent, failed = sent + ok, failed + (not ok)
         await asyncio.sleep(ASK_PRICE_PAUSE)
     return sent, failed

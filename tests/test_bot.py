@@ -497,6 +497,41 @@ async def test_admin_asks_every_seller_to_update_the_price(h):
     assert not h.to(STRANGER)[-1:] or "нархини" not in texts(h.to(STRANGER)[-1:])
 
 
+async def test_admin_reminds_sellers_who_have_not_paid(tmp_path):
+    """/askpay: one message in both languages to each seller whose placement is not paid."""
+    h = await Harness(tmp_path / "askpay.db", fee=30_000, fee_manual=True).start()
+    try:
+        await choose_lang(h, SELLER, "uz")
+        await choose_lang(h, ADMIN, "ru")
+        await create_listing(h)                       # №1, waits for the fee
+        await create_listing(h)                       # №2, paid: not reminded
+        await h.repo.pay_fee_manually(2, ADMIN)
+        await h.repo.touch_user(STRANGER, "user3", "Name3")
+        from .test_core import draft as repo_draft
+        await h.repo.create_listing(STRANGER, "ru", repo_draft())  # №3, placed for free, in moderation
+        gone = await h.repo.create_listing(STRANGER, "ru", repo_draft(), fee=30_000)
+        await h.repo.withdraw_by_seller(gone, STRANGER)            # №4, withdrawn: not reminded
+
+        assert "Админка" not in texts(await h.send(STRANGER, "/askpay"))  # admins only
+        ask = texts(await h.send(ADMIN, "/askpay"))
+        assert "2 продавцам (2 неоплаченных объявлений)" in ask and "не оплачено" in ask and "тўланмаган" in ask
+        before = {uid: len(h.to(uid)) for uid in (SELLER, STRANGER)}
+        assert "Отправлено: 2. Не доставлено: 0" in texts(await h.click(ADMIN, "ad:askpay!:0:0:"))
+        for uid, lid in ((SELLER, 1), (STRANGER, 3)):
+            got = h.to(uid)[before[uid]:]
+            text = texts(got)
+            assert len(got) == 1 and "Размещение объявления не оплачено" in text and "тўланмаган" in text
+            assert f"№{lid} — 30\xa0000 сум" in text and f"№{lid} — 30\xa0000 сўм" in text
+            assert "№2" not in text and "№4" not in text and "@s_sarvar" in text
+            assert [b.url for c in got for b in buttons_of(c)] == ["https://t.me/s_sarvar"] * 2
+
+        await h.repo.pay_fee_manually(1, ADMIN)
+        await h.repo.pay_fee_manually(3, ADMIN, 30_000)
+        assert "Нет продавцов с неоплаченными" in texts(await h.send(ADMIN, "/askpay"))
+    finally:
+        await h.stop()
+
+
 async def test_other_club_membership_has_no_1fit_questions(h):
     """UFC Gym, Ozone, Fitness Embassy: no 1Fit tariff, installments, bonus days or suggested price."""
     await choose_lang(h, SELLER, "ru")

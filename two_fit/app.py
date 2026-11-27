@@ -57,6 +57,7 @@ async def setup_bot_profile(bot: Bot, i18n: I18n, cfg: Config) -> None:
             await bot.set_my_commands(
                 [BotCommand(command="admin", description="Admin"), BotCommand(command="prices", description="1Fit prices"),
                  BotCommand(command="askprice", description="Ask sellers to update prices"),
+                 BotCommand(command="askpay", description="Ask sellers to pay for unpaid listings"),
                  BotCommand(command="start", description="Menu")],
                 scope=BotCommandScopeChat(chat_id=admin_id),
             )

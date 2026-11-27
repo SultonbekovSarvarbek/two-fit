@@ -30,6 +30,15 @@ class Notifier:
             log.warning("notify user %s failed: %s", user_id, e)
             return False
 
+    async def send(self, user_id: int, text: str, markup: InlineKeyboardMarkup | None = None) -> bool:
+        """A ready text, the same for everyone (a message in both languages)."""
+        try:
+            await self.bot.send_message(user_id, text, reply_markup=markup)
+            return True
+        except TelegramAPIError as e:
+            log.warning("notify user %s failed: %s", user_id, e)
+            return False
+
     async def users(self, ctx: Ctx, user_ids: list[int], build: Builder) -> None:
         for uid in dict.fromkeys(user_ids):
             await self.user(ctx, uid, build)
