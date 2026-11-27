@@ -91,12 +91,13 @@ main {{ max-width: 420px; padding: 32px 24px; }}
 h1 {{ margin: 0 0 6px; font-size: 26px; line-height: 1.2; }} h1 + h1 {{ margin-bottom: 20px; }}
 p {{ margin: 0 0 12px; color: var(--muted); }}
 a {{ display: block; margin-top: 28px; padding: 16px 20px; border-radius: 16px; background: var(--btn); color: var(--on-btn);
-  font-weight: 700; font-size: 17px; text-decoration: none; }}
+  font-weight: 700; font-size: 17px; line-height: 1.35; text-decoration: none; }}
+a span {{ display: block; white-space: nowrap; }}
 </style></head><body><main>
 <h1>Мы переехали!</h1><h1>Биз кўчдик!</h1>
 <p>2FIT теперь называется <b>Repass</b> и работает в новом боте.</p>
 <p>2FIT энди <b>Repass</b> деб номланади ва янги ботда ишлайди.</p>
-<a id="go" href="{url}">Перейти в Repass · Repass'га ўтиш →</a>
+<a id="go" href="{url}"><span>Перейти в Repass →</span><span>Repass'га ўтиш →</span></a>
 </main><script>
 (function () {{
   var tg = window.Telegram && window.Telegram.WebApp, go = document.getElementById("go");
